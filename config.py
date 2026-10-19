@@ -28,23 +28,42 @@ class Config:
 
     # LLM Settings (Ollama)
     OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
-    # Silero VAD Settings
+    # Silero VAD Settings (optimized for natural kiosk conversational pauses)
     VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
-    VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.5"))
-    # Minimum silence duration in ms before considering speech finished
-    VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "800"))
+    VAD_THRESHOLD = float(os.getenv("VAD_THRESHOLD", "0.65"))
+    # Minimum silence duration in ms before considering speech finished (850ms allows natural hesitation without cutting off)
+    VAD_MIN_SILENCE_MS = int(os.getenv("VAD_MIN_SILENCE_MS", "850"))
+    VAD_SPEECH_PAD_MS = int(os.getenv("VAD_SPEECH_PAD_MS", "100"))
     # Chunk size for Silero VAD v5 at 16kHz
     VAD_CHUNK_SIZE = 512
 
-    # Whisper STT Settings
+    # Whisper STT Settings (small provides high accuracy for accents & customizations, runs in ~0.6s)
     WHISPER_MODEL = os.getenv("WHISPER_MODEL", "small")
     WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "en")
 
-    # TTS Settings
-    TTS_VOICE = os.getenv("TTS_VOICE", "Arabic")
-    TTS_RATE = int(os.getenv("TTS_RATE", "150"))
+    # TTS Settings:
+    TTS_ENGINE = os.getenv("TTS_ENGINE", "piper")  # "piper" (primary local neural, ~70ms) or "edge" (cloud neural)
+
+    # 1. Primary Local Neural Voice: Piper TTS (100% offline, ~70ms latency, zero cloud timeouts)
+    #    en_US-ryan-medium: Natural American English (Male)
+    #    ar_JO-kareem-medium: Arabic (Male)
+    PIPER_MODEL_PATH = os.getenv("PIPER_MODEL_PATH", str(BASE_DIR / "models" / "piper" / "en_US-ryan-medium.onnx"))
+    PIPER_CONFIG_PATH = os.getenv("PIPER_CONFIG_PATH", str(BASE_DIR / "models" / "piper" / "en_US-ryan-medium.onnx.json"))
+    PIPER_ARABIC_MODEL_PATH = os.getenv("PIPER_ARABIC_MODEL_PATH", str(BASE_DIR / "models" / "piper" / "ar_JO-kareem-medium.onnx"))
+
+    # 2. Cloud Neural Fallback: edge-tts (Microsoft Azure Neural voices — high quality, cloud)
+    #    en-US-BrianMultilingualNeural: Standard natural English with support for Arabic loanwords/names (Male).
+    #    ar-SA-HamedNeural: Saudi Arabic (Male).
+    EDGE_TTS_VOICE = os.getenv("EDGE_TTS_VOICE", "en-US-BrianMultilingualNeural")
+    EDGE_TTS_ARABIC_VOICE = os.getenv("EDGE_TTS_ARABIC_VOICE", "ar-SA-HamedNeural")
+    EDGE_TTS_RATE = os.getenv("EDGE_TTS_RATE", "+8%")    # Slightly brisk for kiosk pace
+    EDGE_TTS_VOLUME = os.getenv("EDGE_TTS_VOLUME", "+0%")
+    EDGE_TTS_TIMEOUT = float(os.getenv("EDGE_TTS_TIMEOUT", "9.0"))
+
+    # 3. Emergency offline fallback: pyttsx3 (only if edge-tts and piper are unavailable)
+    TTS_RATE = int(os.getenv("TTS_RATE", "155"))
     TTS_VOLUME = float(os.getenv("TTS_VOLUME", "1.0"))
 
     # Demo / Mock fallback toggle

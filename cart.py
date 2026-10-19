@@ -25,6 +25,7 @@ class OrderCart:
         self.declined_suggestions: set = set()
         self.is_submitted: bool = False
         self.order_number: Optional[str] = None
+        self.confirmation_requested: bool = False  # Tracks if Chef has read back items before submit
 
     def add_item(self, product_id: Any, name: str, quantity: int = 1, price: float = 0.0, notes: str = "") -> CartItem:
         # Check if item with same ID/name already in cart
@@ -47,14 +48,106 @@ class OrderCart:
         self.items.append(new_item)
         return new_item
 
-    def remove_item(self, item_identifier: str) -> bool:
-        """Remove item by name or id."""
-        target_name = item_identifier.lower()
-        for i, item in enumerate(self.items):
-            if str(item.product_id) == item_identifier or item.name.lower() == target_name:
-                self.items.pop(i)
-                return True
-        return False
+    def update_item_notes(self, notes: str, item_identifier: Optional[str] = None) -> Dict[str, Any]:
+        """Update or set notes (customization, sweetness, ice) on a cart item."""
+        if not self.items:
+            return {
+                "success": False,
+                "error": "The cart is empty, so customization cannot be applied."
+            }
+
+        target_idx = -1
+        if item_identifier:
+            target = item_identifier.strip().lower()
+            for i, item in enumerate(self.items):
+                if target in item.name.lower() or item.name.lower() in target:
+                    target_idx = i
+                    break
+
+        # Default to the most recently added item
+        if target_idx == -1:
+            target_idx = len(self.items) - 1
+
+        item = self.items[target_idx]
+        item.notes = notes.strip()
+        return {
+            "success": True,
+            "product_name": item.name,
+            "notes": item.notes,
+            "message": f"Updated {item.name} notes to: {item.notes}",
+            "cart_summary": self.get_items_summary()
+        }
+
+    def remove_item(self, item_identifier: str = "", quantity: Optional[int] = 1) -> Dict[str, Any]:
+        """
+        Remove item by name, keyword, or id, or reduce its quantity.
+        Supports fuzzy matching (e.g., 'burger' matches 'Classic Cheeseburger').
+        If item_identifier is 'last', 'last item', 'one item', or empty and cart has items,
+        operates on the most recently added item.
+        """
+        if not self.items:
+            return {
+                "success": False,
+                "error": "The cart is already empty. There are no items to remove."
+            }
+
+        target = (item_identifier or "").strip().lower()
+        matched_idx = -1
+
+        # Check for generic "last item", "one item", or empty identifier
+        if target in {"last", "last item", "one item", "item", "the item", "it", ""} and len(self.items) > 0:
+            matched_idx = len(self.items) - 1
+        else:
+            # 1. Exact match on ID or full name
+            for i, item in enumerate(self.items):
+                if str(item.product_id).lower() == target or item.name.lower() == target:
+                    matched_idx = i
+                    break
+
+            # 2. Substring match (e.g. 'burger' in 'Truffle Burger')
+            if matched_idx == -1:
+                for i, item in enumerate(self.items):
+                    if target in item.name.lower() or item.name.lower() in target:
+                        matched_idx = i
+                        break
+
+            # 3. Word-level token match (e.g. 'caramel' matches 'Iced Caramel Latte')
+            if matched_idx == -1:
+                target_words = set(target.split())
+                for i, item in enumerate(self.items):
+                    item_words = set(item.name.lower().split())
+                    if target_words & item_words:
+                        matched_idx = i
+                        break
+
+        if matched_idx == -1:
+            return {
+                "success": False,
+                "error": f"Item '{item_identifier}' not found in cart. Current items: {self.get_items_summary()}"
+            }
+
+        item = self.items[matched_idx]
+        qty_to_remove = int(quantity) if quantity is not None and int(quantity) > 0 else 1
+
+        if item.quantity > qty_to_remove:
+            item.quantity -= qty_to_remove
+            msg = f"Reduced {item.name} quantity by {qty_to_remove}. Remaining: {item.quantity}."
+            removed_all = False
+        else:
+            actual_removed = item.quantity
+            self.items.pop(matched_idx)
+            msg = f"Removed {item.name} completely from cart."
+            removed_all = True
+
+        return {
+            "success": True,
+            "removed_item": item.name,
+            "quantity_removed": qty_to_remove,
+            "removed_completely": removed_all,
+            "message": msg,
+            "cart_summary": self.get_items_summary(),
+            "new_total": self.get_total()
+        }
 
     def get_total(self) -> float:
         return round(sum(item.total_price for item in self.items), 2)
@@ -115,3 +208,4 @@ class OrderCart:
         self.declined_suggestions.clear()
         self.is_submitted = False
         self.order_number = None
+        self.confirmation_requested = False

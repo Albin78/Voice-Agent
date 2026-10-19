@@ -1,0 +1,27 @@
+# Core Configuration & Environment
+python-dotenv>=1.0.0
+
+# HTTP & REST API Client
+requests>=2.31.0
+aiohttp>=3.9.0
+
+# Audio I/O & Processing
+sounddevice>=0.4.6
+soundfile>=0.12.1
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0
+
+# Voice Activity Detection (VAD) & Neural Models
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Speech-To-Text (ASR)
+openai-whisper>=20231117
+
+# Text-To-Speech (TTS)
+edge-tts>=7.0.0
+piper-tts>=1.8.0
+pyttsx3>=2.90
+
+# Terminal UI & Visualization
+rich>=13.0.0

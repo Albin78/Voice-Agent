@@ -77,21 +77,23 @@ def run_voice_mode(agent: ChefAgent, vad: SileroVADDetector, stt: WhisperSTT, tt
             def on_speech_start():
                 KioskUI.print_status("🎙️  Speech detected! Recording...", "bright_green")
 
-            def on_speech_end():
-                KioskUI.print_status("🤫 Speech ended. Transcribing with Whisper...", "bright_blue")
-
             # Listen for speech using Silero VAD v5
             audio = vad.listen_and_record_speech(
                 on_speech_start=on_speech_start,
-                on_speech_end=on_speech_end
+                on_speech_end=None
             )
 
             if audio is None:
+                # Ambient noise / breath / click filtered out by VAD
+                time.sleep(0.05)
                 continue
+
+            KioskUI.print_status("🤫 Processing speech with Whisper...", "bright_blue")
 
             # Transcribe audio with Whisper
             transcript = stt.transcribe(audio)
             if not transcript:
+                time.sleep(0.05)
                 continue
 
             KioskUI.print_turn("Customer", transcript, is_chef=False)
@@ -109,7 +111,6 @@ def run_voice_mode(agent: ChefAgent, vad: SileroVADDetector, stt: WhisperSTT, tt
 
             # Short acoustic settling delay to prevent microphone from picking up speaker echo
             time.sleep(0.5)
-
             console.print("\n[bold green]🎤 Listening for your next response...[/bold green]")
 
         except KeyboardInterrupt:
@@ -199,13 +200,14 @@ def main():
     agent = ChefAgent(cart=cart, menu_client=menu_client)
     tts = TextToSpeech()
 
-    if args.voice:
+    if args.text:
+        # Interactive text simulation mode (customer types in terminal)
+        run_text_mode(agent, tts, enable_tts=not args.no_tts)
+    else:
+        # Default: Live voice mode (customer speaks into microphone)
         vad = SileroVADDetector()
         stt = WhisperSTT()
         run_voice_mode(agent, vad, stt, tts)
-    else:
-        # Default to text simulation mode (or run with --voice for live mic)
-        run_text_mode(agent, tts, enable_tts=not args.no_tts)
 
 
 if __name__ == "__main__":

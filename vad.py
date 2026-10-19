@@ -51,7 +51,7 @@ class SileroVADDetector:
             threshold=self.threshold,
             sampling_rate=self.sample_rate,
             min_silence_duration_ms=self.min_silence_ms,
-            speech_pad_ms=30,
+            speech_pad_ms=getattr(Config, "VAD_SPEECH_PAD_MS", 100),
         )
 
     def listen_and_record_speech(
@@ -75,8 +75,8 @@ class SileroVADDetector:
                 logger.warning(f"Audio buffer status: {status}")
             audio_q.put(indata.copy())
 
-        # Buffer for pre-speech frames (approx 300ms)
-        pre_speech_chunks = int(0.3 * self.sample_rate / self.chunk_size)
+        # Buffer for pre-speech frames (approx 400ms to preserve initial syllables)
+        pre_speech_chunks = int(0.4 * self.sample_rate / self.chunk_size)
         pre_speech_ring = collections.deque(maxlen=pre_speech_chunks)
 
         speech_detected = False
@@ -162,10 +162,32 @@ class SileroVADDetector:
         if speech_frames:
             full_audio = np.concatenate(speech_frames, axis=0)
             duration = len(full_audio) / self.sample_rate
-            logger.info(f"Recorded speech utterance of {duration:.2f} seconds.")
-            # Ignore ultra-short spurious noise (<0.3s)
-            if duration < 0.3:
+
+            # Ignore ultra-short noise (<0.45s)
+            if duration < 0.45:
                 return None
+
+            # Calculate RMS energy: breathing is typically < 0.012, spoken voice > 0.025
+            rms = float(np.sqrt(np.mean(full_audio**2)))
+            logger.info(f"Recorded utterance: {duration:.2f}s with RMS energy: {rms:.4f}")
+            if rms < 0.014:
+                logger.info(f"Utterance energy too low ({rms:.4f} < 0.014). Discarding breathing/ambient noise.")
+                return None
+
+            # Spectral Flatness Measure (SFM):
+            # Speech has tonal peaks -> SFM < 0.55.
+            # Broadband noise / HVAC / music -> SFM close to 1.0.
+            # Threshold of 0.72 is conservative - catches clear noise without rejecting accented speech.
+            fft_power = np.abs(np.fft.rfft(full_audio)) ** 2 + 1e-12
+            sfm = float(np.exp(np.mean(np.log(fft_power))) / np.mean(fft_power))
+            if sfm > 0.72:
+                logger.info(f"High spectral flatness ({sfm:.3f} > 0.72) - likely broadband noise. Discarding.")
+                return None
+
             return full_audio
 
         return None
+
+
+# Backward-compatibility alias
+VoiceActivityDetector = SileroVADDetector

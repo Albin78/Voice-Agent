@@ -2,3 +2,6 @@ __pycache__/
 .env.*
 .env
 myenv/
+*.mp3
+*.wav
+models/

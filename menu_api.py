@@ -13,6 +13,7 @@ SAMPLE_PRODUCTS = [
     {"productId": 102, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Caramel Latte", "price": 4.75, "description": "Rich espresso with chilled milk and caramel syrup", "isActive": True},
     {"productId": 103, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Cold Brew Coffee", "price": 4.25, "description": "Slow-steeped smooth iced coffee", "isActive": True},
     {"productId": 104, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Lemon Tea", "price": 3.00, "description": "Refreshing black tea with fresh lemon slices", "isActive": True},
+    {"productId": 122, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Fresh Apple Juice", "price": 3.75, "description": "Freshly pressed chilled apple juice", "isActive": True},
     
     # HOT DRINKS (id: 18)
     {"productId": 105, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Hot Cappuccino", "price": 4.00, "description": "Steamed milk foam over velvety espresso", "isActive": True},
@@ -258,5 +259,5 @@ class MenuAPIClient:
             "query": query,
             "products": results[:3],
             "total_matches": len(results),
-            "hint": f"These are the available options matching '{query}'. Present at most 3 options and ask which one they prefer."
+            "hint": f"Available options matching '{query}'. If customer asked to order or have this, immediately call add_item(product_name='{results[0]['name']}', quantity=1). Otherwise if they are just browsing, mention at most 3 options."
         }
