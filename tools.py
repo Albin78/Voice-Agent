@@ -24,7 +24,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "get_products",
-            "description": "Get available products for a specific category name or ID.",
+            "description": "Call when customer wants to view, see, browse, or explore products in a category or asks 'what items do you have in [category]', 'show me [category]', or 'I want to see all items in [category]' (e.g. 'see items in soft ice', 'show me cold drinks', 'what float options do you have'). NEVER call add_item when customer is asking to see or browse items.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -62,7 +62,7 @@ TOOL_DEFINITIONS = [
         "type": "function",
         "function": {
             "name": "add_item",
-            "description": "Add an item to the customer order cart whenever customer states what they want, order, or request (e.g. 'I want green tea', 'add hot latte', 'apple juice', 'two coffees', 'a croissant'). Call add_item directly without calling search first.",
+            "description": "Add a specific item to the customer order cart when customer clearly requests to purchase, buy, or add a food or beverage (e.g. 'I will have a soft ice cone', 'add one latte', 'give me a cappuccino', 'two coffees', 'a croissant'). NEVER call add_item when customer says 'see', 'show', 'view', 'browse', or asks what items exist in a category—use get_products or search_product instead.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -109,6 +109,18 @@ TOOL_DEFINITIONS = [
                     }
                 },
                 "required": ["product_name"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "clear_cart",
+            "description": "Clear or remove ALL items from the customer cart (e.g. 'remove everything from cart', 'clear my cart', 'empty the cart', 'start over', 'cancel all items'). Call this when customer wants to empty or clear their whole order tray.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
             }
         }
     },
@@ -190,6 +202,39 @@ TOOL_DEFINITIONS = [
                 "required": ["reason"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_addons",
+            "description": "Call ONLY after add_item has been called for an add-on eligible item (Affogato, Americano Float, Americano Hot L/M, Cafe Latte Float, Cappuccino M/L, Caramel Banana Soft Ice, Caramel Latte Float, Caramel Latte Hot L/M). Returns the list of available add-ons (Non-Dairy Milk, Extra Fruit, Extra Sauce, Extra Soft, Extra Shot) each priced at 0.500 BHD.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_addon",
+            "description": "Add an extra add-on (Non-Dairy Milk, Extra Fruit, Extra Sauce, Extra Soft, Extra Shot, each +0.500 BHD) to an eligible beverage or soft ice in the cart. Call this when customer agrees to an add-on or requests extra shot, non-dairy milk, etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "addon_name": {
+                        "type": "string",
+                        "description": "Name of add-on: 'Non-Dairy Milk', 'Extra Fruit', 'Extra Sauce', 'Extra Soft', or 'Extra Shot'"
+                    },
+                    "product_name": {
+                        "type": "string",
+                        "description": "Optional name of the product in cart to attach add-on to"
+                    }
+                },
+                "required": ["addon_name"]
+            }
+        }
     }
 ]
 
@@ -246,7 +291,8 @@ class ToolDispatcher:
                     price=price,
                     notes=notes
                 )
-                return json.dumps({
+
+                result = {
                     "success": True,
                     "status": "added",
                     "item_added": item.name,
@@ -254,7 +300,34 @@ class ToolDispatcher:
                     "unit_price": item.price,
                     "current_cart_total": self.cart.get_total(),
                     "items_in_cart": len(self.cart.items)
-                })
+                }
+
+                # If this item is add-on eligible, prompt the agent to ask about add-ons
+                if self.menu_client.is_addon_eligible(item.name):
+                    result["addon_eligible"] = True
+                    result["addon_prompt"] = (
+                        "This item supports add-ons. You MUST now call get_addons() to retrieve the list, "
+                        "then ask the customer in ONE short sentence if they'd like any: "
+                        "Non-Dairy Milk, Extra Fruit, Extra Sauce, Extra Soft, or Extra Shot (each +0.500 BHD). "
+                        "Do NOT list all 5 in detail — just ask briefly if they want any add-ons."
+                    )
+                    # Auto-apply add-on if mentioned in notes (e.g. "with extra shot")
+                    lower_notes = notes.lower()
+                    for kw, a_name in [
+                        ("non dairy milk", "Non-Dairy Milk"),
+                        ("non-dairy milk", "Non-Dairy Milk"),
+                        ("extra fruit", "Extra Fruit"),
+                        ("extra sauce", "Extra Sauce"),
+                        ("extra soft", "Extra Soft"),
+                        ("extra shot", "Extra Shot"),
+                    ]:
+                        if kw in lower_notes:
+                            self.cart.add_addon(addon_name=a_name, item_identifier=item.name, price=0.500)
+                            result["addon_applied"] = a_name
+                            result["current_cart_total"] = self.cart.get_total()
+                            break
+
+                return json.dumps(result)
 
             elif tool_name == "remove_item":
                 name = arguments.get("product_name") or arguments.get("name") or arguments.get("item_name") or ""
@@ -277,12 +350,12 @@ class ToolDispatcher:
             elif tool_name == "confirm_and_submit":
                 if not getattr(self.cart, "confirmation_requested", False):
                     # Enforce Rule 5: read back items and total first
-                    items_sum = self.cart.get_items_summary()
+                    items_sum = self.cart.get_spoken_items_summary()
                     total = self.cart.get_total()
                     self.cart.confirmation_requested = True
                     return json.dumps({
                         "success": False,
-                        "action_required": f"DO NOT submit yet. You must first read back the items ({items_sum}) and total (${total:.2f}), then ask: 'Shall I place this order?'. Wait for customer's clear yes before calling confirm_and_submit."
+                        "action_required": f"DO NOT submit yet. You must first read back the items ({items_sum}) and total ({total:.3f} BHD), then ask: 'Shall I place this order?'. Wait for customer's clear yes before calling confirm_and_submit."
                     })
                 res = self.cart.confirm_and_submit()
                 self.cart.confirmation_requested = False
@@ -298,6 +371,50 @@ class ToolDispatcher:
                 mood_input = arguments.get("mood", "")
                 res = self._tool_recommend_by_mood(mood_input)
                 return json.dumps(res)
+
+            elif tool_name == "get_addons":
+                p_name = arguments.get("product_name")
+                res = self.menu_client.get_addons(item_name=p_name)
+                return json.dumps(res)
+
+            elif tool_name == "add_addon":
+                addon_name = arguments.get("addon_name") or arguments.get("name") or ""
+                p_name = arguments.get("product_name")
+                # First check eligibility of target item
+                target_item = None
+                if p_name:
+                    for it in self.cart.items:
+                        if p_name.lower() in it.name.lower() or it.name.lower() in p_name.lower():
+                            target_item = it
+                            break
+                elif self.cart.items:
+                    target_item = self.cart.items[-1]
+
+                if not target_item:
+                    return json.dumps({
+                        "success": False,
+                        "error": "The cart is empty. Please add an item first."
+                    })
+
+                if not self.menu_client.is_addon_eligible(target_item.name):
+                    return json.dumps({
+                        "success": False,
+                        "addon_eligible": False,
+                        "message": f"Sorry, add-ons are only available for select items (such as Affogato, Floats, and Cappuccinos), not for '{target_item.name}'."
+                    })
+
+                res = self.cart.add_addon(addon_name=addon_name, item_identifier=target_item.name, price=0.500)
+                return json.dumps(res)
+
+            elif tool_name == "clear_cart":
+                count = len(self.cart.items)
+                self.cart.clear()
+                return json.dumps({
+                    "success": True,
+                    "cleared_all": True,
+                    "items_removed": count,
+                    "message": "I have removed everything from your cart. Your order tray is now empty."
+                })
 
             elif tool_name == "call_staff":
                 reason = arguments.get("reason", "Customer requested assistance")

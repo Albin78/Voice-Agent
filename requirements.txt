@@ -23,5 +23,11 @@ edge-tts>=7.0.0
 piper-tts>=1.8.0
 pyttsx3>=2.90
 
+# Web UI & API
+streamlit>=1.45.0
+fastapi>=0.115.0
+uvicorn>=0.34.0
+
 # Terminal UI & Visualization
 rich>=13.0.0
+

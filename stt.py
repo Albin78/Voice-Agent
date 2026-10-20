@@ -7,14 +7,15 @@ from config import Config
 
 logger = logging.getLogger("WhisperSTT")
 
-# Kiosk domain vocabulary prompt to bias Whisper decoding toward restaurant terms and customizations
+# Kiosk conversational vocabulary prompt: prime Whisper with both hot and cold drink vocabulary
+# This prevents the decoder from biasing toward 'cold' when customer says 'hot'.
 MENU_VOCAB_PROMPT = (
-    "Restaurant self-service voice kiosk order menu: hot green tea, less sugar, "
-    "no sugar, extra sugar, normal sugar, without sugar, low sugar, half sweet, sweet, "
-    "condensed sugar, cold drinks, hot drinks, float, kakigori, shakes, affogato, soft ice, "
-    "iced americano, iced caramel latte, cappuccino, cold brew, espresso, chocolate milkshake, "
-    "vanilla soft ice, muffin, croissant, fresh apple juice, extra ice, no ice, hot, cold, "
-    "energy, tired, stressed, relaxing, refreshing, mood recommendation."
+    "Hello! Hi there. Okay, show me your menu. Show me the hot drinks. I want hot cappuccino. Give me a hot latte. "
+    "What are the cold drinks? I want to see all items in soft ice. Show me what drinks you have. "
+    "Can I see the menu? I would like a caramel latte with less sugar and extra ice please. "
+    "Hot drinks: hot cappuccino, hot latte, espresso, hot green tea. "
+    "Cold drinks: iced americano, cold brew, iced lemon tea, fresh apple juice. "
+    "Soft ice, float, kakigori, affogato, milkshake. Non-dairy milk, extra fruit, extra sauce, extra soft, extra shot. Thank you."
 )
 
 # Common Whisper hallucinations triggered by silence, breathing, or sighs
@@ -38,20 +39,37 @@ HALLUCINATION_PATTERNS = [
 
 # Common acoustic/phonetic misrecognitions for accented speech & customizations
 PHONETIC_CORRECTIONS = [
-    (r'\b(?:cord|cold)\s+(?:rings?|ring)\b', 'cold drinks'),
+    # Hot/cold confusion: 'cord drinks' or 'core drinks' → cold drinks
     (r'\b(?:cord|core)\s+(?:drinks?)\b', 'cold drinks'),
-    (r'\bsoft\s+eyes?\b', 'soft ice'),
+    # 'cord rings' or 'cold rings' → cold drinks
+    (r'\b(?:cord|cold)\s+(?:rings?|ring)\b', 'cold drinks'),
+    # 'hot rings' → hot drinks
     (r'\bhot\s+rings?\b', 'hot drinks'),
+    # 'odd drinks' → hot drinks (common mishear of 'hot')
+    (r'\bodd\s+(?:drinks?)\b', 'hot drinks'),
+    # 'heart drinks' → hot drinks
+    (r'\bheart\s+(?:drinks?)\b', 'hot drinks'),
+    # 'caught drinks' → hot drinks (accent pattern)
+    (r'\bcaught\s+(?:drinks?)\b', 'hot drinks'),
+    # soft ice
+    (r'\bsoft\s+eyes?\b', 'soft ice'),
     (r'\bkakiguri\b', 'kakigori'),
+    # Add-on misrecognitions
+    (r'\bextra\s+salt\b', 'extra soft'),
+    # Sugar customizations
     (r'\b(?:shooting|shoot\s*in|shot\s*in|suit\s*in|should\s*in)\s+(?:condined|condensed|contained)?\s*sugar\b', 'less sugar'),
     (r'\b(?:shooting|shoot\s*in|shot\s*in|suit\s*in)\s+sugar\b', 'less sugar'),
     (r'\b(?:condined|condence)\s+sugar\b', 'condensed sugar'),
     (r'\b(?:less|las|lass)\s+(?:shoogar|suger|shugar)\b', 'less sugar'),
     (r'\bno\s+(?:shoogar|suger|shugar)\b', 'no sugar'),
+    # Item names
     (r'\bgreen\s+(?:item|d|day|tree|tee)\b', 'green tea'),
     (r'\bhot\s+lat\b', 'hot latte'),
     (r'\bcappuchino\b', 'cappuccino'),
+    (r'\bnon\s+dairy\b', 'non-dairy'),
+    (r'\bnon\s+diary\b', 'non-dairy'),
 ]
+
 
 
 def is_repetition_hallucination(text: str) -> bool:

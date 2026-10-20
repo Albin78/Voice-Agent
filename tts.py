@@ -122,8 +122,10 @@ class TextToSpeech:
                 return False
 
             buf = io.BytesIO()
+            from piper.config import SynthesisConfig
+            syn_config = SynthesisConfig(length_scale=getattr(Config, "PIPER_LENGTH_SCALE", 1.10))
             with wave.open(buf, 'wb') as wav_file:
-                voice.synthesize_wav(text, wav_file)
+                voice.synthesize_wav(text, wav_file, syn_config=syn_config)
 
             buf.seek(0)
             data, sr = sf.read(buf)

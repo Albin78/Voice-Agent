@@ -1,6 +1,8 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Any, Optional
 import random
+import re
+import time
 
 
 @dataclass
@@ -10,10 +12,19 @@ class CartItem:
     quantity: int = 1
     price: float = 0.0
     notes: str = ""
+    addons: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def addon_total(self) -> float:
+        return sum(float(a.get("price", 0.500)) for a in self.addons)
+
+    @property
+    def unit_total(self) -> float:
+        return round(self.price + self.addon_total, 3)
 
     @property
     def total_price(self) -> float:
-        return round(self.quantity * self.price, 2)
+        return round(self.quantity * self.unit_total, 3)
 
 
 class OrderCart:
@@ -26,6 +37,7 @@ class OrderCart:
         self.is_submitted: bool = False
         self.order_number: Optional[str] = None
         self.confirmation_requested: bool = False  # Tracks if Chef has read back items before submit
+        self.last_placed_order: Optional[Dict[str, Any]] = None
 
     def add_item(self, product_id: Any, name: str, quantity: int = 1, price: float = 0.0, notes: str = "") -> CartItem:
         # Check if item with same ID/name already in cart
@@ -48,6 +60,72 @@ class OrderCart:
         self.items.append(new_item)
         return new_item
 
+    def add_addon(self, addon_name: str, item_identifier: Optional[str] = None, price: float = 0.500) -> Dict[str, Any]:
+        """Add a specific add-on (Non-Dairy Milk, Extra Fruit, Extra Sauce, Extra Soft, Extra Shot) to an item."""
+        if not self.items:
+            return {
+                "success": False,
+                "error": "The cart is empty. Please order an eligible beverage or soft ice first before adding add-ons."
+            }
+
+        target_idx = -1
+        if item_identifier:
+            target = item_identifier.strip().lower()
+            for i, item in enumerate(self.items):
+                if target in item.name.lower() or item.name.lower() in target:
+                    target_idx = i
+                    break
+
+        # Default to the most recently added item
+        if target_idx == -1:
+            target_idx = len(self.items) - 1
+
+        item = self.items[target_idx]
+
+        # Standardize add-on name
+        name_lower = addon_name.strip().lower()
+        clean_name = addon_name.strip()
+        if "non" in name_lower and ("milk" in name_lower or "dairy" in name_lower):
+            clean_name = "Non-Dairy Milk"
+        elif "fruit" in name_lower:
+            clean_name = "Extra Fruit"
+        elif "sauce" in name_lower or "syrup" in name_lower:
+            clean_name = "Extra Sauce"
+        elif "soft" in name_lower:
+            clean_name = "Extra Soft"
+        elif "shot" in name_lower or "espresso" in name_lower:
+            clean_name = "Extra Shot"
+
+        existing = [a.get("name") for a in item.addons]
+        if clean_name in existing:
+            return {
+                "success": True,
+                "already_added": True,
+                "addon_name": clean_name,
+                "product_name": item.name,
+                "message": f"{clean_name} is already added to {item.name}.",
+                "item_total": item.total_price,
+                "cart_total": self.get_total()
+            }
+
+        addon_obj = {"name": clean_name, "price": round(float(price), 3)}
+        item.addons.append(addon_obj)
+        if item.notes:
+            if clean_name.lower() not in item.notes.lower():
+                item.notes = f"{item.notes}, {clean_name}"
+        else:
+            item.notes = clean_name
+
+        return {
+            "success": True,
+            "addon_name": clean_name,
+            "price": addon_obj["price"],
+            "product_name": item.name,
+            "item_total": item.total_price,
+            "cart_total": self.get_total(),
+            "message": f"Added {clean_name} (+{addon_obj['price']:.3f} BHD) to your {item.name}. New total: {self.get_total():.3f} BHD."
+        }
+
     def update_item_notes(self, notes: str, item_identifier: Optional[str] = None) -> Dict[str, Any]:
         """Update or set notes (customization, sweetness, ice) on a cart item."""
         if not self.items:
@@ -55,6 +133,25 @@ class OrderCart:
                 "success": False,
                 "error": "The cart is empty, so customization cannot be applied."
             }
+
+        # Check if notes contains an add-on request (e.g. "extra shot", "non dairy milk", "extra fruit")
+        lower_notes = notes.lower()
+        addon_keywords = [
+            ("non dairy milk", "Non-Dairy Milk"),
+            ("non-dairy milk", "Non-Dairy Milk"),
+            ("extra fruit", "Extra Fruit"),
+            ("extra sauce", "Extra Sauce"),
+            ("extra soft", "Extra Soft"),
+            ("extra shot", "Extra Shot"),
+        ]
+        detected_addon = None
+        for kw, a_name in addon_keywords:
+            if kw in lower_notes:
+                detected_addon = a_name
+                break
+
+        if detected_addon:
+            return self.add_addon(addon_name=detected_addon, item_identifier=item_identifier, price=0.500)
 
         target_idx = -1
         if item_identifier:
@@ -93,6 +190,29 @@ class OrderCart:
 
         target = (item_identifier or "").strip().lower()
         matched_idx = -1
+
+        # Check if customer asked to remove everything / clear cart
+        if target in {
+            "all", "everything", "all items", "all the items", "everything from cart",
+            "everything from my cart", "all items from cart", "cart", "the cart", "my cart",
+            "entire cart", "whole cart"
+        }:
+            item_count = len(self.items)
+            self.clear()
+            return {
+                "success": True,
+                "cleared_all": True,
+                "items_removed": item_count,
+                "removed_item": "everything",
+                "message": "Removed everything from your cart. Your order tray is now empty.",
+                "cart_summary": "Cart is currently empty.",
+                "new_total": 0.0
+            }
+
+        # Strip common leading words like "the ", "my ", "a ", "an ", "one "
+        clean_target = re.sub(r'^(?:the|my|a|an|one)\s+', '', target).strip()
+        if clean_target:
+            target = clean_target
 
         # Check for generic "last item", "one item", or empty identifier
         if target in {"last", "last item", "one item", "item", "the item", "it", ""} and len(self.items) > 0:
@@ -150,7 +270,7 @@ class OrderCart:
         }
 
     def get_total(self) -> float:
-        return round(sum(item.total_price for item in self.items), 2)
+        return round(sum(item.total_price for item in self.items), 3)
 
     def is_empty(self) -> bool:
         return len(self.items) == 0
@@ -161,9 +281,30 @@ class OrderCart:
             return "Cart is currently empty."
         parts = []
         for item in self.items:
-            note_str = f" ({item.notes})" if item.notes else ""
-            parts.append(f"{item.quantity}x {item.name}{note_str} at ${item.price:.2f} each")
-        return ", ".join(parts) + f" (Total: ${self.get_total():.2f})"
+            addon_str = ""
+            if getattr(item, "addons", None):
+                addon_names = ", ".join(a.get("name") for a in item.addons)
+                addon_str = f" with {addon_names}"
+            parts.append(f"{item.quantity}x {item.name}{addon_str} at {item.unit_total:.3f} BHD each")
+        return ", ".join(parts) + f" (Total: {self.get_total():.3f} BHD)"
+
+    def get_spoken_items_summary(self) -> str:
+        """Returns warm, natural spoken summary of items in cart for readback."""
+        if not self.items:
+            return "no items"
+        parts = []
+        for item in self.items:
+            addon_str = ""
+            if getattr(item, "addons", None):
+                addon_names = ", ".join(a.get("name") for a in item.addons)
+                addon_str = f" with {addon_names}"
+            parts.append(f"{item.quantity} {item.name}{addon_str}")
+        if len(parts) == 1:
+            return parts[0]
+        elif len(parts) == 2:
+            return f"{parts[0]} and {parts[1]}"
+        else:
+            return ", ".join(parts[:-1]) + f", and {parts[-1]}"
 
     def record_declined_suggestion(self, suggestion_name: str):
         self.declined_suggestions.add(suggestion_name.strip().lower())
@@ -172,24 +313,40 @@ class OrderCart:
         return suggestion_name.strip().lower() in self.declined_suggestions
 
     def confirm_and_submit(self) -> Dict[str, Any]:
-        """Finalize order, generate order number and reset cart."""
+        """Finalize order, generate order number and save placed order before resetting active cart."""
         if self.is_empty():
             return {
                 "success": False,
                 "error": "Cannot submit empty order. Please add at least one item first."
             }
 
-        order_num = str(random.randint(101, 999))
+        order_num = f"GIR-{random.randint(101, 999)}"
         total = self.get_total()
         items_ordered = [
-            {"product_id": item.product_id, "name": item.name, "quantity": item.quantity, "price": item.price}
+            {
+                "product_id": item.product_id,
+                "name": item.name,
+                "quantity": item.quantity,
+                "price": item.price,
+                "unit_total": item.unit_total,
+                "total_price": item.total_price,
+                "notes": item.notes,
+                "addons": list(item.addons) if getattr(item, "addons", None) else []
+            }
             for item in self.items
         ]
 
         self.order_number = order_num
         self.is_submitted = True
-        
-        # Reset cart after generating result
+        self.confirmation_requested = False
+        self.last_placed_order = {
+            "order_number": order_num,
+            "total": total,
+            "items": items_ordered,
+            "time": time.strftime("%H:%M:%S")
+        }
+
+        # Reset active cart tray now that order is secured
         self.items = []
         self.last_quoted_total = None
         self.declined_suggestions.clear()
@@ -209,3 +366,45 @@ class OrderCart:
         self.is_submitted = False
         self.order_number = None
         self.confirmation_requested = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Serialize cart to dictionary for frontend storage."""
+        return {
+            "items": [
+                {
+                    "product_id": str(i.product_id),
+                    "name": i.name,
+                    "quantity": i.quantity,
+                    "price": i.price,
+                    "total_price": i.total_price,
+                    "notes": i.notes
+                }
+                for i in self.items
+            ],
+            "total_items": sum(i.quantity for i in self.items),
+            "total_amount": round(self.get_total(), 2),
+            "is_empty": self.is_empty(),
+            "is_submitted": self.is_submitted,
+            "order_number": self.order_number
+        }
+
+    def load_from_dict(self, data: Optional[Dict[str, Any]]):
+        """Populate in-memory cart directly from frontend state without database query."""
+        if not data or not isinstance(data, dict):
+            return
+        self.items = []
+        raw_items = data.get("items", [])
+        for item in raw_items:
+            try:
+                self.items.append(CartItem(
+                    product_id=item.get("product_id"),
+                    name=item.get("name", ""),
+                    quantity=int(item.get("quantity", 1)),
+                    price=float(item.get("price", 0.0)),
+                    notes=item.get("notes", "")
+                ))
+            except Exception:
+                pass
+        self.is_submitted = bool(data.get("is_submitted", False))
+        self.order_number = data.get("order_number")
+

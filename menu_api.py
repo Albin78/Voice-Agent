@@ -6,44 +6,75 @@ from config import Config
 
 logger = logging.getLogger("MenuAPI")
 
-# Realistic fallback menu based on the live categories (IDs 18-24)
+# Real menu items matching the live API products (fallback when API token expires)
 SAMPLE_PRODUCTS = [
     # COLD DRINKS (id: 19)
-    {"productId": 101, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Americano", "price": 3.50, "description": "Bold espresso over ice and cold water", "isActive": True},
-    {"productId": 102, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Caramel Latte", "price": 4.75, "description": "Rich espresso with chilled milk and caramel syrup", "isActive": True},
-    {"productId": 103, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Cold Brew Coffee", "price": 4.25, "description": "Slow-steeped smooth iced coffee", "isActive": True},
-    {"productId": 104, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Lemon Tea", "price": 3.00, "description": "Refreshing black tea with fresh lemon slices", "isActive": True},
-    {"productId": 122, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Fresh Apple Juice", "price": 3.75, "description": "Freshly pressed chilled apple juice", "isActive": True},
-    
+    {"productId": 101, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Americano", "price": 1.500, "description": "Bold espresso over ice and cold water", "isActive": True},
+    {"productId": 102, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Caramel Latte", "price": 1.750, "description": "Rich espresso with chilled milk and caramel syrup", "isActive": True},
+    {"productId": 103, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Cold Brew Coffee", "price": 1.750, "description": "Slow-steeped smooth iced coffee", "isActive": True},
+    {"productId": 104, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Iced Lemon Tea", "price": 1.250, "description": "Refreshing black tea with fresh lemon slices", "isActive": True},
+    {"productId": 122, "productCategoryId": 19, "categoryName": "COLD DRINKS", "productName": "Fresh Apple Juice", "price": 1.500, "description": "Freshly pressed chilled apple juice", "isActive": True},
+
     # HOT DRINKS (id: 18)
-    {"productId": 105, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Hot Cappuccino", "price": 4.00, "description": "Steamed milk foam over velvety espresso", "isActive": True},
-    {"productId": 106, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Hot Latte", "price": 4.25, "description": "Smooth espresso with steamed whole milk", "isActive": True},
-    {"productId": 107, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Espresso Single", "price": 2.50, "description": "Classic concentrated single shot of espresso", "isActive": True},
-    {"productId": 108, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Hot Green Tea", "price": 3.00, "description": "Fresh brewed fragrant Japanese green tea", "isActive": True},
+    {"productId": 105, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Americano Hot M", "price": 1.250, "description": "Medium hot espresso americano", "isActive": True},
+    {"productId": 106, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Americano Hot L", "price": 1.500, "description": "Large hot espresso americano", "isActive": True},
+    {"productId": 107, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Cappuccino M", "price": 1.500, "description": "Medium cappuccino with steamed milk foam", "isActive": True},
+    {"productId": 108, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Cappuccino L", "price": 1.750, "description": "Large cappuccino with steamed milk foam", "isActive": True},
+    {"productId": 109, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Caramel Latte Hot M", "price": 1.750, "description": "Medium hot caramel latte", "isActive": True},
+    {"productId": 110, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Caramel Latte Hot L", "price": 2.000, "description": "Large hot caramel latte", "isActive": True},
+    {"productId": 111, "productCategoryId": 18, "categoryName": "HOT DRINKS", "productName": "Hot Green Tea", "price": 1.250, "description": "Fresh brewed fragrant Japanese green tea", "isActive": True},
 
     # FLOAT (id: 23)
-    {"productId": 109, "productCategoryId": 23, "categoryName": "FLOAT", "productName": "Cola Ice Cream Float", "price": 4.50, "description": "Chilled fizzy cola topped with vanilla soft ice", "isActive": True},
-    {"productId": 110, "productCategoryId": 23, "categoryName": "FLOAT", "productName": "Matcha Float", "price": 5.25, "description": "Iced ceremonial matcha latte topped with soft ice cream", "isActive": True},
+    {"productId": 112, "productCategoryId": 23, "categoryName": "FLOAT", "productName": "Americano Float", "price": 2.250, "description": "Iced americano topped with vanilla soft ice cream float", "isActive": True},
+    {"productId": 113, "productCategoryId": 23, "categoryName": "FLOAT", "productName": "Cafe Latte Float", "price": 2.500, "description": "Chilled latte topped with soft ice cream", "isActive": True},
+    {"productId": 114, "productCategoryId": 23, "categoryName": "FLOAT", "productName": "Caramel Latte Float", "price": 2.750, "description": "Rich caramel latte with vanilla float", "isActive": True},
+    {"productId": 115, "productCategoryId": 23, "categoryName": "FLOAT", "productName": "Cola Ice Cream Float", "price": 2.000, "description": "Chilled fizzy cola topped with vanilla soft ice", "isActive": True},
 
     # KAKIGORI (id: 20)
-    {"productId": 111, "productCategoryId": 20, "categoryName": "KAKIGORI", "productName": "Strawberry Kakigori", "price": 6.00, "description": "Fluffy shaved ice with fresh strawberry syrup and condensed milk", "isActive": True},
-    {"productId": 112, "productCategoryId": 20, "categoryName": "KAKIGORI", "productName": "Mango Kakigori", "price": 6.50, "description": "Shaved ice drizzled with ripe mango puree and cream", "isActive": True},
+    {"productId": 116, "productCategoryId": 20, "categoryName": "KAKIGORI", "productName": "Strawberry Kakigori", "price": 2.500, "description": "Fluffy shaved ice with fresh strawberry syrup and condensed milk", "isActive": True},
+    {"productId": 117, "productCategoryId": 20, "categoryName": "KAKIGORI", "productName": "Mango Kakigori", "price": 2.500, "description": "Shaved ice drizzled with ripe mango puree and cream", "isActive": True},
 
     # SHAKES & AFFOGATO (id: 21)
-    {"productId": 113, "productCategoryId": 21, "categoryName": "SHAKES & AFFOGATO", "productName": "Vanilla Milkshake", "price": 5.00, "description": "Thick creamy vanilla shake blended with rich milk", "isActive": True},
-    {"productId": 114, "productCategoryId": 21, "categoryName": "SHAKES & AFFOGATO", "productName": "Chocolate Milkshake", "price": 5.25, "description": "Decadent chocolate milkshake with cocoa drizzle", "isActive": True},
-    {"productId": 115, "productCategoryId": 21, "categoryName": "SHAKES & AFFOGATO", "productName": "Classic Affogato", "price": 4.50, "description": "Hot espresso shot poured over cold vanilla ice cream", "isActive": True},
+    {"productId": 118, "productCategoryId": 21, "categoryName": "SHAKES & AFFOGATO", "productName": "Vanilla Milkshake", "price": 2.000, "description": "Thick creamy vanilla shake blended with rich milk", "isActive": True},
+    {"productId": 119, "productCategoryId": 21, "categoryName": "SHAKES & AFFOGATO", "productName": "Chocolate Milkshake", "price": 2.000, "description": "Decadent chocolate milkshake with cocoa drizzle", "isActive": True},
+    {"productId": 120, "productCategoryId": 21, "categoryName": "SHAKES & AFFOGATO", "productName": "Affogato", "price": 2.250, "description": "Hot espresso shot poured over cold vanilla ice cream", "isActive": True},
 
     # SOFT ICE (id: 22)
-    {"productId": 116, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Vanilla Soft Ice Cone", "price": 3.00, "description": "Creamy soft serve vanilla ice cream in a crisp waffle cone", "isActive": True},
-    {"productId": 117, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Chocolate Soft Ice Cone", "price": 3.25, "description": "Rich dark chocolate soft serve in waffle cone", "isActive": True},
-    {"productId": 118, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Twist Soft Ice Cup", "price": 3.50, "description": "Vanilla and chocolate swirl served in a cup", "isActive": True},
+    {"productId": 121, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Vanilla Soft Ice", "price": 1.000, "description": "Creamy soft serve vanilla ice cream", "isActive": True},
+    {"productId": 123, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Chocolate Soft Ice", "price": 1.000, "description": "Rich chocolate soft serve", "isActive": True},
+    {"productId": 124, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Caramel Banana Soft Ice", "price": 1.750, "description": "Caramel and banana flavored soft ice cream", "isActive": True},
+    {"productId": 125, "productCategoryId": 22, "categoryName": "SOFT ICE", "productName": "Strawberry Soft Ice", "price": 1.000, "description": "Fresh strawberry soft serve", "isActive": True},
 
     # OTHERS (id: 24)
-    {"productId": 119, "productCategoryId": 24, "categoryName": "OTHERS", "productName": "Butter Croissant", "price": 3.25, "description": "Flaky golden fresh baked butter pastry", "isActive": True},
-    {"productId": 120, "productCategoryId": 24, "categoryName": "OTHERS", "productName": "Chocolate Chip Muffin", "price": 3.00, "description": "Warm fluffy muffin loaded with chocolate chips", "isActive": True},
-    {"productId": 121, "productCategoryId": 24, "categoryName": "OTHERS", "productName": "Sparkling Water", "price": 2.25, "description": "Chilled bottle of natural sparkling mineral water", "isActive": True}
+    {"productId": 126, "productCategoryId": 24, "categoryName": "OTHERS", "productName": "Butter Croissant", "price": 1.500, "description": "Flaky golden fresh baked butter pastry", "isActive": True},
+    {"productId": 127, "productCategoryId": 24, "categoryName": "OTHERS", "productName": "Sparkling Water", "price": 0.750, "description": "Chilled bottle of natural sparkling mineral water", "isActive": True},
 ]
+
+# Add-ons available in BHD (Bahraini Dinar) - attached to specific qualifying items
+ADDON_PRODUCTS = [
+    {"addonId": 1, "name": "Non-Dairy Milk", "price": 0.500},
+    {"addonId": 2, "name": "Extra Fruit", "price": 0.500},
+    {"addonId": 3, "name": "Extra Sauce", "price": 0.500},
+    {"addonId": 4, "name": "Extra Soft", "price": 0.500},
+    {"addonId": 5, "name": "Extra Shot", "price": 0.500},
+]
+
+# These item names are eligible for add-ons (case-insensitive substring match)
+ADDON_ELIGIBLE_ITEMS = {
+    "affogato",
+    "americano float",
+    "americano hot l",
+    "americano hot m",
+    "cafe latte float",
+    "cappuccino m",
+    "cappuccino l",
+    "cappuccino hot m",
+    "cappuccino hot l",
+    "caramel banana soft ice",
+    "caramel latte float",
+    "caramel latte hot l",
+    "caramel latte hot m",
+}
 
 
 class MenuAPIClient:
@@ -148,13 +179,35 @@ class MenuAPIClient:
                         except (ValueError, TypeError):
                             price = 0.0
 
+                        p_name = p.get("productName") or p.get("name") or ""
+                        is_eligible = self.is_addon_eligible(p_name)
+                        addons_list = []
+                        if is_eligible:
+                            # Extract available add-ons from API modifierGroups
+                            for mg in p.get("modifierGroups", []):
+                                for opt in mg.get("options", []):
+                                    if opt.get("isAvailable", True):
+                                        try:
+                                            adj = float(opt.get("priceAdjustment", 0.5))
+                                        except (ValueError, TypeError):
+                                            adj = 0.5
+                                        addons_list.append({
+                                            "addonId": opt.get("modifierOptionId"),
+                                            "name": opt.get("name"),
+                                            "price": round(adj, 3)
+                                        })
+                            if not addons_list:
+                                addons_list = list(ADDON_PRODUCTS)
+
                         products.append({
                             "productId": p.get("productId") or p.get("id"),
-                            "name": p.get("productName") or p.get("name"),
-                            "price": round(price, 2),
+                            "name": p_name,
+                            "price": round(price, 3),
                             "category": c_name or f"Category {cat_id}",
                             "description": p.get("description", "") or "",
-                            "available": True
+                            "available": True,
+                            "addon_eligible": is_eligible,
+                            "addons": addons_list
                         })
                     self._products_cache = products
                     return {"success": True, "products": products}
@@ -183,13 +236,19 @@ class MenuAPIClient:
             if category_name and category_name.lower() not in c_name.lower():
                 continue
 
+            p_name = p["productName"]
+            is_eligible = self.is_addon_eligible(p_name)
+            addons_list = list(ADDON_PRODUCTS) if is_eligible else []
+
             products.append({
                 "productId": p["productId"],
-                "name": p["productName"],
-                "price": float(p["price"]),
+                "name": p_name,
+                "price": round(float(p["price"]), 3),
                 "category": c_name,
                 "description": p.get("description", ""),
-                "available": True
+                "available": True,
+                "addon_eligible": is_eligible,
+                "addons": addons_list
             })
 
         return {"success": True, "products": products}
@@ -261,3 +320,65 @@ class MenuAPIClient:
             "total_matches": len(results),
             "hint": f"Available options matching '{query}'. If customer asked to order or have this, immediately call add_item(product_name='{results[0]['name']}', quantity=1). Otherwise if they are just browsing, mention at most 3 options."
         }
+
+    def get_addons(self, item_name: Optional[str] = None) -> Dict[str, Any]:
+        """Return the list of available add-ons with their prices."""
+        if item_name and not self.is_addon_eligible(item_name):
+            return {
+                "success": False,
+                "addon_eligible": False,
+                "message": f"Add-ons are not available for '{item_name}'. Add-ons are only for select beverages and soft ice."
+            }
+        return {
+            "success": True,
+            "addon_eligible": True,
+            "addons": ADDON_PRODUCTS,
+            "note": "Each add-on costs 0.500 BHD. Ask the customer which ones they want."
+        }
+
+    def is_addon_eligible(self, item_name: str) -> bool:
+        """Check whether an item name is eligible to receive add-ons.
+        Eligible products (only these 11):
+          1. Affogato (plain, not Matcha Affogato)
+          2. Americano Float
+          3. Americano Hot L
+          4. Americano Hot M
+          5. Cafe Latte Float
+          6. Cappuccino Hot M / Cappuccino M
+          7. Cappuccino Hot L / Cappuccino L
+          8. Caramel Banana Soft Ice
+          9. Caramel Latte Float / Caramel latte Float
+          10. Caramel Latte Hot L
+          11. Caramel Latte Hot M
+        """
+        if not item_name:
+            return False
+        name = item_name.strip().lower()
+
+        if "matcha" in name:
+            return False
+
+        if "affogato" in name:
+            return True
+        if "americano float" in name:
+            return True
+        if "americano hot" in name and (" l" in name or name.endswith("l") or "large" in name):
+            return True
+        if "americano hot" in name and (" m" in name or name.endswith("m") or "medium" in name):
+            return True
+        if "cafe latte float" in name:
+            return True
+        if "cappuccino" in name and (" l" in name or name.endswith("l") or "large" in name):
+            return True
+        if "cappuccino" in name and (" m" in name or name.endswith("m") or "medium" in name):
+            return True
+        if "caramel banana soft ice" in name:
+            return True
+        if "caramel latte float" in name:
+            return True
+        if "caramel latte hot" in name and (" l" in name or name.endswith("l") or "large" in name):
+            return True
+        if "caramel latte hot" in name and (" m" in name or name.endswith("m") or "medium" in name):
+            return True
+
+        return False

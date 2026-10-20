@@ -34,6 +34,14 @@ TOOL_NAME_MAP = {
     "confirmandsubmit": "confirm_and_submit",
     "recommend_by_mood": "recommend_by_mood",
     "recommendbymood": "recommend_by_mood",
+    "get_addons": "get_addons",
+    "getaddons": "get_addons",
+    "add_addon": "add_addon",
+    "addaddon": "add_addon",
+    "clearcart": "clear_cart",
+    "clear_cart": "clear_cart",
+    "emptycart": "clear_cart",
+    "empty_cart": "clear_cart",
     "call_staff": "call_staff",
     "callstaff": "call_staff",
 }
@@ -120,6 +128,29 @@ def _extract_tool_calls_from_text(content: str) -> List[Dict[str, Any]]:
             tool_calls.append({"function": {"name": fn_name, "arguments": args}})
         except Exception:
             pass
+
+    if tool_calls:
+        return tool_calls
+
+    # 4. Spoken declaration fallback: e.g. "Adding an Affogato to your order...", "Removing the Affogato..."
+    # Clear cart spoken declaration fallback
+    if re.search(r'\b(?:clearing|cleared|empty|emptied|i\'ve cleared|i have cleared|removing everything|removed everything|remove everything|clear everything)\b', content, re.IGNORECASE):
+        return [{"function": {"name": "clear_cart", "arguments": {}}}]
+
+    # Remove item spoken declaration fallback
+    rem_match = re.search(r'\b(?:removing|removed|i\'ve removed|i have removed|take off|taking off|cancel|cancelled)\s+(?:the\s+|my\s+|a\s+|an\s+|one\s+)?([A-Za-z0-9 ]+?)(?:\s+from your (?:order|cart)|\s+from (?:order|cart)|\.|\,|$)', content, re.IGNORECASE)
+    if rem_match:
+        cand_name = rem_match.group(1).strip()
+        if len(cand_name) > 2 and cand_name.lower() not in {"this", "that", "it", "item"}:
+            if cand_name.lower() in {"everything", "all", "all items", "all the items", "cart", "the cart", "my cart"}:
+                return [{"function": {"name": "clear_cart", "arguments": {}}}]
+            return [{"function": {"name": "remove_item", "arguments": {"product_name": cand_name, "quantity": 1}}}]
+
+    add_match = re.search(r'\b(?:adding|added|i\'ve added|i have added)\s+(?:an?|one|\d+)?\s*([A-Za-z0-9 ]+?)(?:\s+to your order|\s+to your cart|\.|\,)', content, re.IGNORECASE)
+    if add_match:
+        cand_name = add_match.group(1).strip()
+        if len(cand_name) > 2 and cand_name.lower() not in {"this", "that", "it", "item"}:
+            tool_calls.append({"function": {"name": "add_item", "arguments": {"product_name": cand_name, "quantity": 1}}})
 
     return tool_calls
 
@@ -227,6 +258,78 @@ _RESTAURANT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Clear whole cart / remove everything pattern
+_CLEAR_CART_RE = re.compile(
+    r'\b('
+    r'(?:clear|empty|remove|delete|cancel)\s+(?:all|everything|all\s+the\s+items|all\s+items|the\s+entire\s+cart|the\s+whole\s+cart|my\s+cart|the\s+cart)(?:\s+from\s+(?:my\s+|the\s+)?cart)?|'
+    r'clear\s+cart|empty\s+cart|start\s+over|reset\s+order'
+    r')\b',
+    re.IGNORECASE
+)
+
+# Remove specific item pattern
+_REMOVE_ITEM_RE = re.compile(
+    r'^(?:please\s+)?(?:remove|take\s+off|cancel|delete)\s+(?:the\s+|my\s+|a\s+|an\s+|one\s+)?([A-Za-z0-9 ]+?)(?:\s+from\s+(?:my\s+|the\s+)?(?:cart|order))?$',
+    re.IGNORECASE
+)
+
+# Menu / Category options requests
+_OPTIONS_QUERY_RE = re.compile(
+    r'\b('
+    r'options?(?:\s+(?:of|for|in|available))?|'
+    r'get\s+me\s+(?:the\s+)?options|'
+    r'give\s+me\s+(?:the\s+)?options|'
+    r'what\s+are\s+(?:the\s+)?options|'
+    r'show\s+(?:me\s+)?(?:the\s+)?options|'
+    r'tell\s+(?:me\s+)?(?:the\s+)?options|'
+    r'list\s+(?:the\s+)?(?:options|items)|'
+    r'what\s+(?:kinds?\s+of\s+|types?\s+of\s+)?(?:hot|cold|soft\s+ice|drinks?|coffees?|food|dessert|float|shake|kakigori).*?do\s+you\s+have|'
+    r'what\s+(?:do\s+you\s+have|are\s+your)\s+in\b|'
+    r'what\s+do\s+you\s+have\s+for\b|'
+    r'see\s+all\s+items|view\s+all\s+items|list\s+all\s+items|'
+    r'what\s+(?:hot|cold)\s+drinks\s+do\s+you\s+have|'
+    r'show\s+me\s+(?:all\s+)?(?:the\s+)?(?:hot\s+drinks|cold\s+drinks|soft\s+ice|floats?|shakes?|kakigori|menu)|'
+    r'show\s+me\s+(?:your\s+)?menu|what(?:\x27s|\s+is)\s+on\s+the\s+menu|can\s+i\s+see\s+the\s+menu|view\s+the\s+menu'
+    r')\b',
+    re.IGNORECASE
+)
+
+_CATEGORY_MAP = [
+    ("HOT DRINKS", re.compile(r'\b(?:hot\s+drinks?|hot\s+coffees?|hot\s+beverages?|hot\s+tea)\b', re.IGNORECASE)),
+    ("COLD DRINKS", re.compile(r'\b(?:cold\s+drinks?|iced?\s+drinks?|cold\s+coffees?|iced?\s+coffees?|cold\s+brew|cold\s+beverages?)\b', re.IGNORECASE)),
+    ("SOFT ICE", re.compile(r'\b(?:soft\s*ice|soft\s*serve|ice\s*cream)\b', re.IGNORECASE)),
+    ("FLOAT", re.compile(r'\b(?:floats?|ice\s*cream\s*floats?)\b', re.IGNORECASE)),
+    ("KAKIGORI", re.compile(r'\b(?:kakigori|shaved\s*ice)\b', re.IGNORECASE)),
+    ("SHAKES & AFFOGATO", re.compile(r'\b(?:shakes?|milkshakes?|affogato)\b', re.IGNORECASE)),
+    ("OTHERS", re.compile(r'\b(?:croissants?|pastr(?:y|ies)|snacks?|others?)\b', re.IGNORECASE)),
+]
+
+# Order checkout and placement pattern
+_PLACE_ORDER_RE = re.compile(
+    r'\b('
+    r'place\s+(?:the\s+|my\s+)?order|'
+    r'confirm\s+(?:the\s+|my\s+)?order|'
+    r'submit\s+(?:the\s+|my\s+)?order|'
+    r'checkout|finalize\s+(?:the\s+|my\s+)?order|'
+    r'complete\s+(?:the\s+|my\s+)?order|'
+    r'that(?:\x27s|\s+is)\s+all(?:,\s*place\s+(?:the\s+|my\s+)?order)?|'
+    r'check\s+please|i(?:\x27m|\s+am)\s+done(?:\s+ordering)?|'
+    r'order\s+please'
+    r')\b',
+    re.IGNORECASE
+)
+
+# Confirmation response patterns (when agent asked "Shall I place this order?")
+_CONFIRMATION_YES_RE = re.compile(
+    r'^(?:yes|yeah|yep|sure|ok|okay|please|confirm|place it|place the order|go ahead|proceed|do it|sounds good|yes please|yes place it|yes place the order|confirm it)(?:[\s.!,].*)?$',
+    re.IGNORECASE
+)
+
+_CONFIRMATION_NO_RE = re.compile(
+    r'^(?:no|nope|wait|cancel|not yet|don\x27t|hold on|change)(?:[\s.!,].*)?$',
+    re.IGNORECASE
+)
+
 # Direct customization pattern (sweetness, ice, temperature adjustments)
 _CUSTOMIZATION_RE = re.compile(
     r'^(?:make it |with |can i get |please )?'
@@ -281,6 +384,7 @@ class ChefAgent:
         # Dialogue state tracking
         self.misunderstand_count: int = 0
         self.off_topic_count: int = 0
+        self.welcome_given: bool = False
         self.last_offered_suggestion: Optional[str] = None
         self.messages: List[Dict[str, Any]] = []
 
@@ -295,28 +399,59 @@ class ChefAgent:
 Everything you say is spoken aloud through a speaker, so NEVER use lists, bullet points, numbers (like 1. or 2.), symbols, or markdown.
 Keep all spoken replies warm, natural, and AT MOST 2 SHORT SENTENCES.
 
-MANDATORY TOOL EXECUTION RULES (CRITICAL):
-1. ORDERING / ADDING ITEMS:
-   - When the customer asks to order, eat, or drink anything (e.g. "I want green tea", "add hot latte", "apple juice", "green tea", "two coffees", "a burger"), you MUST call the `add_item` tool with `product_name`, `quantity`, and any `notes` (such as "less sugar", "extra ice").
-   - NEVER call search_product when the customer is ordering or asking for an item (like "I want green tea")—call `add_item` directly!
-   - NEVER say or claim you added an item in conversational text without calling `add_item` first! The physical cart on the screen will not update unless you emit the tool call!
-   - You do NOT need to call search_product first—`add_item` automatically matches and prices the item for you.
-2. REMOVING / CANCELING ITEMS:
-   - When the customer asks to remove, cancel, or take off an item (e.g. "remove the hot latte", "take off the coffee", "cancel one latte", "remove one item from cart"), you MUST call the `remove_item` tool with `product_name` and `quantity`.
-   - NEVER claim you removed an item without calling `remove_item` first!
-3. CUSTOMIZING ITEMS (SWEETNESS / ICE / NOTES):
+MANDATORY INTENT DISAMBIGUATION RULES (CRITICAL):
+1. BROWSING / VIEWING INTENT:
+   - When the customer asks to SEE, SHOW, VIEW, LIST, or BROWSE items, or asks for options (e.g. "get me the options of hot drinks", "what are the options of cold drinks", "I want to see all items in soft ice", "show me what drinks you have", "what items are in float?", "can I see the menu?", "what do you have?"):
+     --> You MUST call `get_products(category_name=...)` or `get_categories()`.
+     --> NEVER reply with just 'Sure', 'Of course', or conversational filler without listing the items! You MUST warmly list up to 3 options with their BHD prices in your response.
+     --> NEVER call `add_item` on browsing requests! Browsing requests are NOT orders.
+
+2. ORDERING / PURCHASING INTENT:
+   - When the customer clearly asks to BUY, HAVE, GET, or ADD an item (e.g. "I want a vanilla soft ice", "give me one latte", "add hot green tea", "two coffees", "a croissant"):
+     --> You MUST IMMEDIATELY call `add_item` with `product_name`, `quantity`, and any `notes` (such as "less sugar", "extra ice").
+     --> CRITICAL: "get me an Americano" is ORDERING, but "get me the options of hot drinks" is BROWSING!
+     --> NEVER ask questions before adding—call `add_item` directly! Do not call search or get_products when ordering.
+     --> NEVER say or claim you added an item in conversational text without calling `add_item` first!
+
+CONTRASTIVE EXAMPLES FOR CLARITY:
+- Customer: "get me the options of hot drinks" -> BROWSING -> Call `get_products(category_name="HOT DRINKS")`. List items with BHD prices! NEVER just say 'Sure'!
+- Customer: "I want to see all items in soft ice" -> BROWSING -> Call `get_products(category_name="SOFT ICE")`. DO NOT call add_item!
+- Customer: "I want a Vanilla Soft Ice" -> ORDERING -> Call `add_item(product_name="Vanilla Soft Ice", quantity=1)`.
+- Customer: "Show me the drinks" -> BROWSING -> Call `get_categories()`.
+- Customer: "Can I get one Cappuccino M" -> ORDERING -> Call `add_item(product_name="Cappuccino M", quantity=1)`.
+- Customer: "remove the Affogato from my cart" -> REMOVE ITEM -> Call `remove_item(product_name="Affogato")`.
+- Customer: "remove everything from cart" -> CLEAR CART -> Call `clear_cart()`.
+
+3. REMOVING / CANCELING ITEMS (CRITICAL):
+   - When the customer asks to remove, cancel, or take off an item (e.g. "remove the Affogato from my cart", "take off the latte"):
+     --> You MUST call the `remove_item` tool.
+   - When the customer asks to remove everything, clear, or empty the cart (e.g. "remove everything from cart", "clear my cart", "empty the cart"):
+     --> You MUST call the `clear_cart` tool.
+   - NEVER say or claim you removed an item or cleared the cart in text without calling the tool first!
+
+4. CUSTOMIZING ITEMS (SWEETNESS / ICE / NOTES):
    - When the customer specifies sweetness or customization for an item (e.g. "less sugar", "no sugar", "extra ice", "oat milk"), call `update_item_notes` with `notes`.
-4. MOOD-BASED RECOMMENDATIONS (IMPORTANT BUSINESS STRATEGY):
-   - When the customer shares how they feel, their mood, or an occasion (e.g. "I'm tired", "need an energy boost", "I'm stressed", "hot outside", "need something refreshing", "I want something sweet", "healthy choice", "recommend for my mood"), you MUST call `recommend_by_mood` with `mood`.
+
+5. ADD-ONS (VERY IMPORTANT):
+   - After calling add_item and the result contains "addon_eligible": true, you MUST immediately call `get_addons()`.
+   - Then ask the customer ONE short question: "Would you like to add Non-Dairy Milk, Extra Fruit, Extra Sauce, Extra Soft, or Extra Shot for 0.5 BHD each?"
+   - When customer agrees to any add-on, call `add_addon` with that add-on name.
+   - If customer says no, move on. NEVER repeat the add-on question again for that item.
+   - Eligible items: Affogato, Americano Float, Americano Hot L, Americano Hot M, Cafe Latte Float, Cappuccino M, Cappuccino L, Cappuccino Hot M, Cappuccino Hot L, Caramel Banana Soft Ice, Caramel Latte Float, Caramel Latte Hot L, Caramel Latte Hot M.
+   - For any other items, add-ons are NOT available.
+
+6. MOOD-BASED RECOMMENDATIONS:
+   - When the customer shares how they feel (e.g. "I'm tired", "need something refreshing", "I want something sweet"), call `recommend_by_mood` with `mood`.
    - Then warmly recommend 1 or 2 matching items in natural spoken voice.
-5. BROWSING / ASKING FOR OPTIONS:
-   - When the customer asks what you have or asks for a category (e.g. "what drinks do you have?", "what is on the menu?"), call `get_categories`, `get_products`, or `search_product`. Mention at most 3 options briefly.
-6. FINALIZING ORDER:
+
+7. FINALIZING ORDER:
    - When the customer is done ordering ("that's all", "nothing else", "check please"), read back the items and total, then ask "Shall I place this order?"
    - Only after a clear confirmation or yes, call `confirm_and_submit`.
-7. CRITICAL SPOKEN RULES:
-   - NEVER speak tool names, code syntax (such as add_item, additem, {{"notes": ...}}), brackets, or JSON aloud.
-   - Reply directly to the customer in warm, natural English sentences."""
+
+8. CRITICAL SPOKEN RULES:
+   - NEVER speak tool names, code syntax, brackets, or JSON aloud.
+   - Reply directly to the customer in warm, natural English sentences.
+   - ALL prices are in BHD (Bahraini Dinar)."""
         self.messages = [{"role": "system", "content": system_content}]
 
     # ------------------------------------------------------------------
@@ -325,6 +460,7 @@ MANDATORY TOOL EXECUTION RULES (CRITICAL):
 
     def get_greeting(self) -> str:
         """Standard warm greeting according to flow."""
+        self.welcome_given = True
         greeting = f"Hi, welcome to {self.restaurant_name}! What can I get for you today?"
         self.messages.append({"role": "assistant", "content": greeting})
         return greeting
@@ -385,6 +521,134 @@ MANDATORY TOOL EXECUTION RULES (CRITICAL):
         reply = random.choice(_OFF_TOPIC_REPLIES)
         return self._quick_reply(reply, cleaned_input)
 
+    def _handle_clear_cart(self, cleaned_input: str) -> Optional[str]:
+        """Handles requests to clear the entire cart or remove everything."""
+        if _CLEAR_CART_RE.search(cleaned_input):
+            if self.cart.is_empty():
+                reply = "Your cart is already empty! What would you like to order today?"
+            else:
+                self.cart.clear()
+                reply = "I've removed everything from your cart. Your order tray is now empty. What can I get for you?"
+            return self._quick_reply(reply, cleaned_input)
+        return None
+
+    def _handle_remove_item(self, cleaned_input: str) -> Optional[str]:
+        """Handles requests to remove a specific item from the cart."""
+        rem_m = _REMOVE_ITEM_RE.match(cleaned_input)
+        if rem_m:
+            candidate = rem_m.group(1).strip()
+            if candidate.lower() in {
+                "everything", "all", "all items", "all the items", "cart", "the cart", "my cart",
+                "everything from cart", "everything from my cart", "all items from cart"
+            }:
+                return self._handle_clear_cart("clear cart")
+
+            res = self.cart.remove_item(item_identifier=candidate)
+            if res.get("success"):
+                item_name = res.get("removed_item", candidate)
+                if self.cart.is_empty():
+                    reply = f"I've removed {item_name} from your cart. Your order tray is now empty. What can I get for you?"
+                else:
+                    reply = f"I've removed {item_name} from your cart. You still have: {self.cart.get_items_summary()}. Would you like anything else?"
+            else:
+                reply = f"I couldn't find {candidate} in your cart. You currently have: {self.cart.get_items_summary()}."
+            return self._quick_reply(reply, cleaned_input)
+        return None
+
+    def _handle_options_query(self, cleaned_input: str) -> Optional[str]:
+        """
+        Immediately responds with a warm greeting and lists category items with BHD prices.
+        Guarantees zero customer waiting time and prevents the LLM from outputting a bare 'Sure'.
+        """
+        if not _OPTIONS_QUERY_RE.search(cleaned_input):
+            return None
+
+        # Check if customer asked for a specific category
+        matched_cat = None
+        for cat_name, c_pat in _CATEGORY_MAP:
+            if c_pat.search(cleaned_input):
+                matched_cat = cat_name
+                break
+
+        if matched_cat:
+            res = self.menu_client.get_products(category_name=matched_cat)
+            prods = res.get("products", [])
+            if prods:
+                top = prods[:3]
+                parts = []
+                for p in top:
+                    name = p.get("name", "")
+                    price = float(p.get("price", 0.0))
+                    parts.append(f"{name} for {price:.3f} BHD")
+                if len(parts) >= 2:
+                    items_speech = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+                else:
+                    items_speech = parts[0]
+
+                if matched_cat == "HOT DRINKS":
+                    reply = f"We have wonderful hot drinks! Some popular choices are {items_speech}. Which one would you like?"
+                elif matched_cat == "COLD DRINKS":
+                    reply = f"We have refreshing cold drinks! Popular choices include {items_speech}. Which one would you like to try?"
+                elif matched_cat == "SOFT ICE":
+                    reply = f"Here are delicious soft ice options: {items_speech}. Which flavor would you like?"
+                elif matched_cat == "FLOAT":
+                    reply = f"Our ice cream floats include {items_speech}. Which one sounds good to you?"
+                elif matched_cat == "SHAKES & AFFOGATO":
+                    reply = f"Our shakes and affogato include {items_speech}. Would you like to try one?"
+                elif matched_cat == "KAKIGORI":
+                    reply = f"We offer refreshing kakigori shaved ice like {items_speech}. Which one would you like?"
+                else:
+                    reply = f"Here are great options in our {matched_cat.lower()}: {items_speech}. What would you like?"
+                return self._quick_reply(reply, cleaned_input)
+
+        # If customer asked generally for drinks
+        if re.search(r'\bdrinks?\b|\bbeverages?\b', cleaned_input, re.IGNORECASE):
+            reply = "We offer both cold and hot drinks, like Ice Americano for 1.500 BHD, Americano Hot M for 1.500 BHD, and Cappuccino Hot L for 2.400 BHD. Would you like something hot or iced?"
+            return self._quick_reply(reply, cleaned_input)
+
+        # General menu request
+        reply = "We offer Cold Drinks, Hot Drinks, Soft Ice, Floats, Shakes, and Kakigori! Which category would you like to explore?"
+        return self._quick_reply(reply, cleaned_input)
+
+    def _handle_checkout_and_confirmation(self, cleaned_input: str) -> Optional[str]:
+        """
+        Handles order finalization and customer confirmation:
+        1. When customer asks to place order / checkout:
+           - If confirmation was not asked yet: reads back items and total amount, asks "Shall I place this order?"
+        2. When customer confirms ("yes", "place it", "confirm"):
+           - Calls confirm_and_submit(), gives order number and total amount, clears active cart.
+        """
+        # Step 2: Customer responds to confirmation question
+        if getattr(self.cart, "confirmation_requested", False):
+            if _CONFIRMATION_YES_RE.match(cleaned_input) or _PLACE_ORDER_RE.search(cleaned_input):
+                res = self.cart.confirm_and_submit()
+                if res.get("success"):
+                    order_num = res.get("order_number")
+                    total = res.get("total")
+                    reply = f"Thank you! Your order #{order_num} has been placed for {total:.3f} BHD. Please proceed to the counter."
+                else:
+                    reply = res.get("error", "Your cart is currently empty! What would you like to order?")
+                return self._quick_reply(reply, cleaned_input)
+
+            elif _CONFIRMATION_NO_RE.match(cleaned_input):
+                self.cart.confirmation_requested = False
+                reply = "No problem! What would you like to add or change in your order?"
+                return self._quick_reply(reply, cleaned_input)
+
+        # Step 1: Customer asks to place order / checkout
+        if _PLACE_ORDER_RE.search(cleaned_input):
+            if self.cart.is_empty():
+                reply = "Your order tray is currently empty! What would you like to order today?"
+                return self._quick_reply(reply, cleaned_input)
+
+            items_speech = self.cart.get_spoken_items_summary()
+            total = self.cart.get_total()
+            self.cart.confirmation_requested = True
+            reply = f"You have {items_speech}, for a total of {total:.3f} BHD. Shall I place this order?"
+            return self._quick_reply(reply, cleaned_input)
+
+        return None
+
     # ------------------------------------------------------------------
     # Main turn processing
     # ------------------------------------------------------------------
@@ -404,11 +668,17 @@ MANDATORY TOOL EXECUTION RULES (CRITICAL):
                 return "I'm having a little trouble hearing you — a staff member is on their way to help."
             return "I didn't quite catch that. What would you like to order?"
 
-        # ── 2. Simple greetings (no LLM needed) ──────────────────────────
+        # ── 2. Simple greetings & common messages (no LLM needed) ───────
         simple = cleaned_input.lower().strip('.!? ')
-        if simple in {"hi", "hello", "hey", "good morning", "good afternoon",
-                      "good evening", "hi there", "hello there", "salam", "marhaba"}:
-            reply = f"Hi there! Welcome to {self.restaurant_name}. What can I get for you today?"
+        greeting_words = {"hi", "hello", "hey", "good morning", "good afternoon",
+                          "good evening", "hi there", "hello there", "salam", "marhaba",
+                          "hi chef", "hello chef", "hey chef"}
+        if simple in greeting_words or re.match(r'^(?:hi|hello|hey)\b(?:\s+(?:there|chef|friend))?$', simple):
+            if self.welcome_given:
+                reply = "Hello! What can I get started for you today?"
+            else:
+                self.welcome_given = True
+                reply = f"Hi there! Welcome to {self.restaurant_name}. What can I get for you today?"
             self.off_topic_count = 0
             self.misunderstand_count = 0
             return self._quick_reply(reply, cleaned_input)
@@ -419,11 +689,65 @@ MANDATORY TOOL EXECUTION RULES (CRITICAL):
             self.misunderstand_count = 0
             return result
 
-        # ── 3b. Customization shortcut (e.g. "less sugar", "no sugar", "extra ice") ──
+        # ── 3a. Clear cart / remove everything shortcut ──────────────────
+        clear_res = self._handle_clear_cart(cleaned_input)
+        if clear_res is not None:
+            self.misunderstand_count = 0
+            self.off_topic_count = 0
+            return clear_res
+
+        # ── 3b. Remove specific item shortcut ─────────────────────────────
+        rem_res = self._handle_remove_item(cleaned_input)
+        if rem_res is not None:
+            self.misunderstand_count = 0
+            self.off_topic_count = 0
+            return rem_res
+
+        # ── 3c. Category options & menu browsing shortcut ────────────────
+        opt_res = self._handle_options_query(cleaned_input)
+        if opt_res is not None:
+            self.misunderstand_count = 0
+            self.off_topic_count = 0
+            return opt_res
+
+        # ── 3d. Checkout & Confirmation shortcut ─────────────────────────
+        checkout_res = self._handle_checkout_and_confirmation(cleaned_input)
+        if checkout_res is not None:
+            self.misunderstand_count = 0
+            self.off_topic_count = 0
+            return checkout_res
+
+        # ── 3e. Customization shortcut (e.g. "less sugar", "no sugar", "extra ice") ──
         if not self.cart.is_empty() and _CUSTOMIZATION_RE.search(cleaned_input):
             self.cart.update_item_notes(cleaned_input)
             last_item = self.cart.items[-1]
             reply = f"I've updated your {last_item.name} with {cleaned_input}. What else can I get for you?"
+            self.off_topic_count = 0
+            self.misunderstand_count = 0
+            return self._quick_reply(reply, cleaned_input)
+
+        # ── 3bb. Add-on shortcut (e.g. "extra shot", "yes with extra shot", "non dairy milk", "extra fruit") ──
+        lower_input = cleaned_input.lower()
+        addon_patterns = [
+            (r'\b(?:non[- ]?dairy\s+milk)\b', "Non-Dairy Milk"),
+            (r'\b(?:extra\s+fruit)\b', "Extra Fruit"),
+            (r'\b(?:extra\s+sauce)\b', "Extra Sauce"),
+            (r'\b(?:extra\s+soft)\b', "Extra Soft"),
+            (r'\b(?:extra\s+shot)\b', "Extra Shot"),
+        ]
+        detected_addon_name = None
+        for pat, a_name in addon_patterns:
+            if re.search(pat, lower_input):
+                detected_addon_name = a_name
+                break
+
+        if detected_addon_name and not self.cart.is_empty():
+            last_item = self.cart.items[-1]
+            if self.menu_client.is_addon_eligible(last_item.name):
+                self.cart.add_addon(detected_addon_name, item_identifier=last_item.name, price=0.500)
+                reply = f"I've added {detected_addon_name} to your {last_item.name}. What else can I get for you?"
+            else:
+                reply = f"Sorry, add-ons are only available for select items, not for {last_item.name}. What else can I get for you?"
             self.off_topic_count = 0
             self.misunderstand_count = 0
             return self._quick_reply(reply, cleaned_input)
@@ -581,6 +905,27 @@ MANDATORY TOOL EXECUTION RULES (CRITICAL):
 
         if not final_reply:
             final_reply = "I'm here to help with your order — what can I get for you?"
+
+        # Anti-stall guardrail: If customer asked for options/menu but LLM gave conversational filler like "Sure" without items
+        if _OPTIONS_QUERY_RE.search(cleaned_input):
+            lower_r = final_reply.lower()
+            words = lower_r.split()
+            if len(words) <= 12 and any(w in lower_r for w in ["sure", "certainly", "of course", "yes", "what would you like", "what can i get", "what sounds good"]):
+                if not any(kw in lower_r for kw in ["bhd", "price", "dinar"]):
+                    opt_res = self._handle_options_query(cleaned_input)
+                    if opt_res:
+                        return opt_res
+
+        # Removal / clearing synchronization guardrail
+        lower_r = final_reply.lower()
+        if any(w in lower_r for w in ["removed", "removing", "taken off", "cleared", "emptied", "cancelling", "cancelled"]):
+            if any(w in cleaned_input.lower() for w in ["everything", "all", "cart"]):
+                self.cart.clear()
+            else:
+                rem_m = _REMOVE_ITEM_RE.match(cleaned_input)
+                if rem_m:
+                    cand = rem_m.group(1).strip()
+                    self.cart.remove_item(cand)
 
         # ── Post-process: strip markdown → transform leaked code into dialogue → limit to 2 sentences ──
         clean_text = clean_spoken_text(final_reply)

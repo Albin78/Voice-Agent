@@ -11,6 +11,77 @@ from config import Config
 logger = logging.getLogger("SileroVAD")
 
 
+class KioskVADIterator:
+    """
+    High-performance streaming VAD iterator for restaurant kiosks.
+    Performs exactly ONE forward pass per audio chunk (preventing state corruption),
+    tracks speech probability for UI soundwaves, and allows configurable pause tolerance
+    (default 1400ms) so customers are never cut off while hesitating or thinking mid-sentence.
+    """
+
+    def __init__(
+        self,
+        model,
+        threshold: float = 0.50,
+        sampling_rate: int = 16000,
+        min_silence_duration_ms: int = 1400,
+        speech_pad_ms: int = 250,
+        neg_threshold: Optional[float] = None,
+    ):
+        self.model = model
+        self.threshold = threshold
+        self.sampling_rate = sampling_rate
+        if neg_threshold is None:
+            neg_threshold = max(threshold - 0.15, 0.01)
+        self.neg_threshold = neg_threshold
+
+        self.min_silence_samples = sampling_rate * min_silence_duration_ms / 1000
+        self.speech_pad_samples = sampling_rate * speech_pad_ms / 1000
+        self.last_speech_prob = 0.0
+        self.reset_states()
+
+    def reset_states(self):
+        if hasattr(self.model, "reset_states"):
+            self.model.reset_states()
+        self.triggered = False
+        self.temp_end = 0
+        self.current_sample = 0
+
+    @torch.no_grad()
+    def __call__(self, x):
+        if not torch.is_tensor(x):
+            x = torch.from_numpy(x)
+        window_size_samples = len(x[0]) if x.dim() == 2 else len(x)
+        self.current_sample += window_size_samples
+
+        speech_prob = self.model(x, self.sampling_rate).item()
+        self.last_speech_prob = speech_prob
+
+        # If voice resumes after a pause, reset the silence countdown
+        if (speech_prob >= self.threshold) and self.temp_end:
+            self.temp_end = 0
+
+        # Speech onset detected
+        if (speech_prob >= self.threshold) and not self.triggered:
+            self.triggered = True
+            speech_start = max(0, self.current_sample - self.speech_pad_samples - window_size_samples)
+            return {"start": int(speech_start)}
+
+        # Speech end candidate
+        if (speech_prob < self.neg_threshold) and self.triggered:
+            if not self.temp_end:
+                self.temp_end = self.current_sample
+            if self.current_sample - self.temp_end < self.min_silence_samples:
+                return None
+            else:
+                speech_end = self.temp_end + self.speech_pad_samples - window_size_samples
+                self.temp_end = 0
+                self.triggered = False
+                return {"end": int(speech_end)}
+
+        return None
+
+
 class SileroVADDetector:
     """Real-time Voice Activity Detection using Silero VAD v5 locally."""
 
@@ -33,25 +104,18 @@ class SileroVADDetector:
                 trust_repo=True,
                 onnx=False,
             )
-            (
-                self.get_speech_timestamps,
-                self.save_audio,
-                self.read_audio,
-                self.VADIterator,
-                self.collect_chunks,
-            ) = self.utils
             logger.info("Silero VAD v5 model loaded successfully.")
         except Exception as e:
             logger.error(f"Failed to load Silero VAD from torch hub: {e}")
             raise e
 
     def create_iterator(self):
-        return self.VADIterator(
+        return KioskVADIterator(
             self.model,
             threshold=self.threshold,
             sampling_rate=self.sample_rate,
             min_silence_duration_ms=self.min_silence_ms,
-            speech_pad_ms=getattr(Config, "VAD_SPEECH_PAD_MS", 100),
+            speech_pad_ms=getattr(Config, "VAD_SPEECH_PAD_MS", 250),
         )
 
     def listen_and_record_speech(
@@ -92,8 +156,7 @@ class SileroVADDetector:
             callback=audio_callback,
         ):
             logger.info(
-                "Microphone stream opened. Listening for speech with Silero VAD"
-                " v5..."
+                "Microphone stream opened. Listening for speech with Silero VAD v5..."
             )
             if on_vad_status:
                 on_vad_status("listening", 0.0)
@@ -111,20 +174,15 @@ class SileroVADDetector:
                 chunk_flat = chunk.flatten()
                 tensor_chunk = torch.from_numpy(chunk_flat)
 
-                # Get speech probability for UI visualization
-                with torch.no_grad():
-                    speech_prob = self.model(
-                        tensor_chunk, self.sample_rate
-                    ).item()
+                # Feed chunk to single-pass KioskVADIterator (advances RNN state once)
+                vad_event = vad_iterator(tensor_chunk)
+                speech_prob = vad_iterator.last_speech_prob
 
                 if on_vad_status:
                     status_label = (
                         "speaking" if speech_detected else "listening"
                     )
                     on_vad_status(status_label, speech_prob)
-
-                # Feed chunk to Silero VADIterator
-                vad_event = vad_iterator(tensor_chunk)
 
                 if vad_event is not None:
                     if "start" in vad_event and not speech_detected:
@@ -137,7 +195,7 @@ class SileroVADDetector:
                         speech_frames.append(chunk_flat)
 
                     elif "end" in vad_event and speech_detected:
-                        logger.info("Silero VAD: Speech end detected.")
+                        logger.info("Silero VAD: Speech end detected after silence hold.")
                         speech_frames.append(chunk_flat)
                         if on_speech_end:
                             on_speech_end()
@@ -150,8 +208,7 @@ class SileroVADDetector:
                             len(speech_frames) * self.chunk_size
                         ) / self.sample_rate > 20:
                             logger.info(
-                                "Max speech length reached (20s). Ending"
-                                " recording."
+                                "Max speech length reached (20s). Ending recording."
                             )
                             if on_speech_end:
                                 on_speech_end()
@@ -159,12 +216,13 @@ class SileroVADDetector:
                     else:
                         pre_speech_ring.append(chunk_flat)
 
+
         if speech_frames:
             full_audio = np.concatenate(speech_frames, axis=0)
             duration = len(full_audio) / self.sample_rate
 
-            # Ignore ultra-short noise (<0.45s)
-            if duration < 0.45:
+            # Ignore ultra-short clicks/pops (<0.28s), but preserve natural single-syllable greetings ('hi', 'hey', 'yes')
+            if duration < 0.28:
                 return None
 
             # Calculate RMS energy: breathing is typically < 0.012, spoken voice > 0.025
