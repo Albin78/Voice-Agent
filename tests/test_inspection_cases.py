@@ -19,7 +19,7 @@ class TestKioskFixes(unittest.TestCase):
 
     def setUp(self):
         self.cart = OrderCart()
-        self.client = MenuAPIClient(force_mock=False)
+        self.client = MenuAPIClient(force_mock=True)
         self.agent = ChefAgent(cart=self.cart, menu_client=self.client)
 
     def test_greeting_after_welcome(self):

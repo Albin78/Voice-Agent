@@ -7,7 +7,7 @@ from menu_api import MenuAPIClient
 
 class TestRemovalAndOptions(unittest.TestCase):
     def setUp(self):
-        self.menu_client = MenuAPIClient()
+        self.menu_client = MenuAPIClient(force_mock=True)
         self.cart = OrderCart()
         self.agent = ChefAgent(cart=self.cart, menu_client=self.menu_client)
 
@@ -87,6 +87,57 @@ class TestRemovalAndOptions(unittest.TestCase):
         print("\n[TEST ORDERING NOT OPTIONS] Reply:", reply)
         # Should not treat as options browsing
         self.assertNotIn("Some popular choices are", reply)
+
+    def test_detected_item_requires_confirmation_choclate_shake(self):
+        """Customer says 'add choclate shake to my cart' -> agent detects Chocolate Milk Shake(s), asks confirmation before adding."""
+        self.cart.clear()
+        reply = self.agent.process_turn("add choclate shake to my cart")
+        print("\n[TEST ADD CHOCLATE SHAKE] Reply:", reply)
+        self.assertTrue("chocolate milk" in reply.lower() and "shake" in reply.lower())
+        self.assertIn("Shall I add", reply)
+        self.assertEqual(len(self.cart.items), 0, "Item must NOT be in cart before customer confirmation!")
+
+        # Customer confirms
+        reply_yes = self.agent.process_turn("yes please")
+        print("\n[TEST CONFIRM CHOCLATE SHAKE] Reply:", reply_yes)
+        self.assertEqual(len(self.cart.items), 1)
+        self.assertTrue("chocolate milk" in self.cart.items[0].name.lower())
+        self.assertEqual(self.cart.items[0].quantity, 1)
+
+    def test_remove_quantity_5_from_cart(self):
+        """When 6 items are in cart and customer asks to remove 5 -> quantity becomes 1."""
+        self.cart.clear()
+        self.cart.add_item(151, "21ice Original Chocolate Soft Ice", 6, 2.7)
+        self.assertEqual(self.cart.items[0].quantity, 6)
+
+        reply = self.agent.process_turn("remove 5 21ice Original Chocolate Soft Ice")
+        print("\n[TEST REMOVE 5 ITEMS] Reply:", reply)
+        self.assertEqual(len(self.cart.items), 1)
+        self.assertEqual(self.cart.items[0].quantity, 1)
+        self.assertIn("removed 5 21ice Original Chocolate Soft Ice", reply)
+
+    def test_remove_item_completely_from_cart(self):
+        """When customer asks to remove an item completely -> item is completely removed."""
+        self.cart.clear()
+        self.cart.add_item(119, "Chocolate Milk Shakes", 1, 2.0)
+        self.cart.add_item(151, "21ice Original Chocolate Soft Ice", 6, 2.7)
+
+        reply = self.agent.process_turn("remove 21ice Original Chocolate Soft Ice completely")
+        print("\n[TEST REMOVE COMPLETELY] Reply:", reply)
+        self.assertEqual(len(self.cart.items), 1)
+        self.assertEqual(self.cart.items[0].name, "Chocolate Milk Shakes")
+
+    def test_distinctive_removal_between_shake_and_soft_ice(self):
+        """When both Chocolate Milk Shakes and 21ice Chocolate Soft Ice are in cart, removing shake only touches shake."""
+        self.cart.clear()
+        self.cart.add_item(119, "Chocolate Milk Shakes", 1, 2.0)
+        self.cart.add_item(151, "21ice Original Chocolate Soft Ice", 6, 2.7)
+
+        reply = self.agent.process_turn("remove chocolate shake")
+        print("\n[TEST DISTINCTIVE REMOVAL] Reply:", reply)
+        self.assertEqual(len(self.cart.items), 1)
+        self.assertEqual(self.cart.items[0].name, "21ice Original Chocolate Soft Ice")
+        self.assertEqual(self.cart.items[0].quantity, 6)
 
 
 if __name__ == "__main__":

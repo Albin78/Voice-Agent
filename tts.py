@@ -36,6 +36,31 @@ def clean_spoken_text(text: str) -> str:
     # Remove remaining markdown symbols
     text = re.sub(r'[~|><\^]', '', text)
 
+    # Convert Bahraini Dinar (BHD) and trim trailing decimals
+    # e.g. 1.500 BHD -> 1.5 BHD, 1.000 BHD -> 1 BHD
+    def replace_bhd(match):
+        val_str = match.group(1)
+        try:
+            val = float(val_str)
+            if val == int(val):
+                clean_val = f"{int(val)}"
+            elif val == round(val, 1):
+                clean_val = f"{val:.1f}"
+            else:
+                clean_val = f"{val:.3f}".rstrip('0').rstrip('.')
+            return f"{clean_val} BHD"
+        except Exception:
+            return f"{val_str} BHD"
+
+    text = re.sub(r'(\d+(?:\.\d+)?)\s*(?:BHD|BD)\b', replace_bhd, text, flags=re.IGNORECASE)
+    text = re.sub(r'\b(?:BHD|BD)\s*(\d+(?:\.\d+)?)', replace_bhd, text, flags=re.IGNORECASE)
+
+    # Phonetic pronunciation corrections for menu items
+    # V60 -> V sixty (prevents "the six to" or "v six zero")
+    text = re.sub(r'\bV60\b', 'V sixty', text, flags=re.IGNORECASE)
+    # Hojicha -> clean spacing
+    text = re.sub(r'\bHojicha\b', 'Hojicha', text, flags=re.IGNORECASE)
+
     # Convert currency e.g. SAR 15.50 or $15.50 to spoken Riyals and Halalas
     def replace_riyal(match):
         riyals = match.group(1)
@@ -53,6 +78,46 @@ def clean_spoken_text(text: str) -> str:
     # Normalize multiple whitespaces and newlines
     text = re.sub(r'\s+', ' ', text).strip()
     return text
+
+
+def split_into_speech_chunks(text: str, max_chunk_chars: int = 90) -> list[tuple[str, int]]:
+    """
+    Split text into natural conversational breath units:
+    1. First split into sentences (. ? ! or newline).
+    2. If a sentence exceeds max_chunk_chars or has multiple list items, split at commas, semicolons, or conjunctions.
+    Returns list of (chunk_text, pause_ms) where pause_ms is the micro-pause silence following the chunk.
+    """
+    if not text:
+        return []
+
+    # Clean up whitespace
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Step 1: Split into sentences
+    raw_sentences = re.split(r'(?<=[.!?])\s+', text)
+    chunks_with_pause: list[tuple[str, int]] = []
+
+    for s in raw_sentences:
+        s = s.strip()
+        if not s:
+            continue
+
+        # If sentence is short enough, keep as single sentence chunk with full sentence pause (250ms)
+        if len(s) <= max_chunk_chars:
+            chunks_with_pause.append((s, 250))
+            continue
+
+        # Long sentence: split by comma, semicolon, or list clauses
+        sub_clauses = re.split(r'[,;]\s+', s)
+        for i, clause in enumerate(sub_clauses):
+            clause = clause.strip()
+            if not clause:
+                continue
+            is_last = (i == len(sub_clauses) - 1)
+            pause = 250 if is_last else 140
+            chunks_with_pause.append((clause, pause))
+
+    return chunks_with_pause
 
 
 class TextToSpeech:
@@ -81,10 +146,21 @@ class TextToSpeech:
         self._piper_initialized = False
 
         self._pyttsx3_engine = None
+        self._has_soundcard = self._detect_soundcard()
 
         if self.engine_mode == "piper":
             # Pre-load Piper voice on startup for 0ms initial latency
             self._get_piper_voice()
+
+    @staticmethod
+    def _detect_soundcard() -> bool:
+        """Return True if the host has a valid audio output device (speaker/DAC)."""
+        try:
+            import sounddevice as sd
+            devs = sd.query_devices()
+            return any(d.get("max_output_channels", 0) > 0 for d in devs)
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Piper TTS (Local Neural Voice - Arabic/Middle Eastern accented English)
@@ -114,22 +190,65 @@ class TextToSpeech:
             self._piper_voice = None
             return None
 
-    def _speak_piper(self, text: str) -> bool:
-        """Synthesize and play speech using Piper neural TTS (100% offline, ~120ms)."""
-        try:
-            voice = self._get_piper_voice()
-            if voice is None:
-                return False
+    def synthesize_audio(self, text: str) -> Optional[tuple]:
+        """
+        Synthesize text into raw numpy audio data and sample rate without playing.
+        Uses intelligent breath chunking and cadence pauses.
+        Returns: (audio_data: np.ndarray, sample_rate: int) or None.
+        """
+        spoken = clean_spoken_text(text)
+        if not spoken:
+            return None
 
-            buf = io.BytesIO()
+        voice = self._get_piper_voice()
+        if voice is None:
+            return None
+
+        try:
+            import numpy as np
             from piper.config import SynthesisConfig
             syn_config = SynthesisConfig(length_scale=getattr(Config, "PIPER_LENGTH_SCALE", 1.10))
-            with wave.open(buf, 'wb') as wav_file:
-                voice.synthesize_wav(text, wav_file, syn_config=syn_config)
 
-            buf.seek(0)
-            data, sr = sf.read(buf)
-            sd.play(data, sr)
+            chunks = split_into_speech_chunks(spoken)
+            if not chunks:
+                return None
+
+            audio_segments = []
+            sample_rate = None
+
+            for chunk_text, pause_ms in chunks:
+                buf = io.BytesIO()
+                with wave.open(buf, 'wb') as wav_file:
+                    voice.synthesize_wav(chunk_text, wav_file, syn_config=syn_config)
+                buf.seek(0)
+                data, sr = sf.read(buf)
+                sample_rate = sr
+                audio_segments.append(data)
+                if pause_ms > 0:
+                    pause_samples = int(sr * (pause_ms / 1000.0))
+                    audio_segments.append(np.zeros(pause_samples, dtype=np.float32))
+
+            if not audio_segments or sample_rate is None:
+                return None
+
+            full_audio = np.concatenate(audio_segments)
+            return (full_audio, sample_rate)
+        except Exception as e:
+            logger.error(f"synthesize_audio failed: {e}")
+            return None
+
+    def _speak_piper(self, text: str) -> bool:
+        """
+        Synthesize and play speech using Piper neural TTS with phrase chunking
+        and natural conversational pause cadence. Eliminates voice slurring and prosody collapse.
+        """
+        try:
+            res = self.synthesize_audio(text)
+            if res is None:
+                return False
+
+            full_audio, sample_rate = res
+            sd.play(full_audio, sample_rate)
             sd.wait()
             return True
         except Exception as e:
@@ -231,6 +350,14 @@ class TextToSpeech:
         """
         spoken = clean_spoken_text(text)
         if not spoken:
+            return
+
+        if not self._has_soundcard:
+            logger.info(f"Host has no audio output hardware (headless VM). Speech synthesized for streaming: '{spoken[:40]}...'")
+            if on_start:
+                on_start()
+            if on_end:
+                on_end()
             return
 
         logger.info(f"Speaking text: '{spoken}'")

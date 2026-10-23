@@ -6,3 +6,7 @@ myenv/
 *.wav
 models/
 .vscode/
+1.txt
+.token_cache.json
+.token_cache.json.tmp
+ssl/

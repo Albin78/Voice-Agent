@@ -1,4 +1,10 @@
+import base64
+import hashlib
+import io
 import time
+import numpy as np
+import scipy.signal
+import soundfile as sf
 import streamlit as st
 
 from cart import OrderCart
@@ -86,6 +92,35 @@ st.markdown("""
         color: #ffffff !important;
     }
 
+    /* Hide visible audio player pop-up bars so the response voice plays seamlessly in realtime */
+    div[data-testid="stAudio"], audio {
+        display: none !important;
+        height: 0px !important;
+        visibility: hidden !important;
+    }
+
+    /* Premium Kiosk Styling for Browser Audio Input Widget */
+    div[data-testid="stAudioInput"] {
+        background: #111827 !important;
+        border: 2px solid #10b981 !important;
+        border-radius: 18px !important;
+        padding: 14px 20px !important;
+        box-shadow: 0 4px 20px rgba(16, 185, 129, 0.25) !important;
+        margin-top: 10px !important;
+        margin-bottom: 16px !important;
+        transition: all 0.3s ease !important;
+    }
+    div[data-testid="stAudioInput"]:hover {
+        border-color: #34d399 !important;
+        box-shadow: 0 6px 25px rgba(52, 211, 153, 0.35) !important;
+    }
+    div[data-testid="stAudioInput"] label p {
+        font-size: 16px !important;
+        font-weight: 700 !important;
+        color: #34d399 !important;
+        letter-spacing: 0.3px !important;
+    }
+
     /* Animated Voice Agent Movement Icon */
     .voice-stage {
         display: flex;
@@ -139,15 +174,39 @@ st.markdown("""
     }
 
     .agent-orb.listening {
-        background: radial-gradient(circle at 35% 35%, #fb7185 0%, #e11d48 50%, #881337 95%) !important;
-        box-shadow: 0 0 70px rgba(244, 63, 94, 0.8), inset 0 0 30px rgba(255, 255, 255, 0.7) !important;
+        background: radial-gradient(circle at 35% 35%, #fbbf24 0%, #d97706 50%, #78350f 95%) !important;
+        box-shadow: 0 0 70px rgba(245, 158, 11, 0.8), inset 0 0 30px rgba(255, 255, 255, 0.7) !important;
         animation: orbActive 0.8s ease-in-out infinite alternate !important;
+    }
+
+    .agent-orb.user-speaking {
+        background: radial-gradient(circle at 35% 35%, #fb7185 0%, #e11d48 50%, #881337 95%) !important;
+        box-shadow: 0 0 85px rgba(244, 63, 94, 0.95), inset 0 0 35px rgba(255, 255, 255, 0.8) !important;
+        animation: orbActive 0.45s ease-in-out infinite alternate !important;
+    }
+
+    .agent-orb.thinking {
+        background: radial-gradient(circle at 35% 35%, #c084fc 0%, #7c3aed 50%, #4c1d95 95%) !important;
+        box-shadow: 0 0 65px rgba(168, 85, 247, 0.85), inset 0 0 25px rgba(255, 255, 255, 0.7) !important;
+        animation: orbFloat 1.2s ease-in-out infinite !important;
+    }
+
+    .agent-orb.understanding {
+        background: radial-gradient(circle at 35% 35%, #c084fc 0%, #9333ea 50%, #581c87 95%) !important;
+        box-shadow: 0 0 75px rgba(168, 85, 247, 0.9), inset 0 0 30px rgba(255, 255, 255, 0.75) !important;
+        animation: orbActive 0.6s ease-in-out infinite alternate !important;
+    }
+
+    .agent-orb.checking {
+        background: radial-gradient(circle at 35% 35%, #fbbf24 0%, #d97706 50%, #78350f 95%) !important;
+        box-shadow: 0 0 75px rgba(245, 158, 11, 0.9), inset 0 0 30px rgba(255, 255, 255, 0.75) !important;
+        animation: orbFloat 1.2s ease-in-out infinite alternate !important;
     }
 
     .agent-orb.speaking {
         background: radial-gradient(circle at 35% 35%, #38bdf8 0%, #0284c7 50%, #0c4a6e 95%) !important;
-        box-shadow: 0 0 70px rgba(56, 189, 248, 0.8), inset 0 0 30px rgba(255, 255, 255, 0.7) !important;
-        animation: orbActive 1.1s ease-in-out infinite alternate !important;
+        box-shadow: 0 0 75px rgba(56, 189, 248, 0.9), inset 0 0 30px rgba(255, 255, 255, 0.7) !important;
+        animation: orbActive 0.7s ease-in-out infinite alternate !important;
     }
 
     @keyframes radarPulse {
@@ -184,6 +243,7 @@ st.markdown("""
         background: #34d399;
         border-radius: 4px;
         animation: wavePulse 1.2s ease-in-out infinite;
+        transition: background 0.3s ease;
     }
 
     .soundwave-bar:nth-child(2) { animation-delay: 0.15s; height: 16px; }
@@ -191,16 +251,107 @@ st.markdown("""
     .soundwave-bar:nth-child(4) { animation-delay: 0.45s; height: 18px; }
     .soundwave-bar:nth-child(5) { animation-delay: 0.2s; height: 10px; }
 
+    .soundwave-bars.listening .soundwave-bar {
+        background: #fbbf24 !important;
+        animation: wavePulse 0.9s ease-in-out infinite !important;
+    }
+
+    .soundwave-bars.user-speaking .soundwave-bar {
+        background: #f43f5e !important;
+        animation: userWave 0.35s ease-in-out infinite alternate !important;
+    }
+
+    .soundwave-bars.understanding .soundwave-bar {
+        background: #c084fc !important;
+        animation: wavePulse 0.7s ease-in-out infinite !important;
+    }
+
+    .soundwave-bars.checking .soundwave-bar {
+        background: #fbbf24 !important;
+        animation: wavePulse 0.85s ease-in-out infinite !important;
+    }
+
+    .soundwave-bars.speaking .soundwave-bar {
+        background: #38bdf8 !important;
+        animation: wavePulse 0.65s ease-in-out infinite !important;
+    }
+
     @keyframes wavePulse {
         0%, 100% { transform: scaleY(0.4); opacity: 0.6; }
         50% { transform: scaleY(1.4); opacity: 1; }
     }
 
+    @keyframes userWave {
+        0% { transform: scaleY(0.4); opacity: 0.7; }
+        100% { transform: scaleY(2.2); opacity: 1; }
+    }
+
     .agent-status-label {
         margin-top: 12px;
-        font-size: 18px;
+        font-size: 19px;
         font-weight: 700;
         letter-spacing: 0.5px;
+        transition: color 0.3s ease;
+    }
+
+    /* Step Activity Pipeline Pills */
+    .agent-step-pipeline {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 14px;
+        flex-wrap: wrap;
+    }
+
+    .step-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 14px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: 700;
+        background: rgba(30, 41, 59, 0.6);
+        color: #64748b;
+        border: 1px solid rgba(51, 65, 85, 0.6);
+        transition: all 0.3s ease;
+    }
+
+    .step-pill.active-understanding {
+        background: rgba(168, 85, 247, 0.22) !important;
+        color: #e9d5ff !important;
+        border-color: #a855f7 !important;
+        box-shadow: 0 0 16px rgba(168, 85, 247, 0.45) !important;
+        transform: scale(1.06);
+    }
+
+    .step-pill.active-checking {
+        background: rgba(245, 158, 11, 0.22) !important;
+        color: #fef08a !important;
+        border-color: #f59e0b !important;
+        box-shadow: 0 0 16px rgba(245, 158, 11, 0.45) !important;
+        transform: scale(1.06);
+    }
+
+    .step-pill.active-speaking {
+        background: rgba(56, 189, 248, 0.22) !important;
+        color: #bae6fd !important;
+        border-color: #38bdf8 !important;
+        box-shadow: 0 0 18px rgba(56, 189, 248, 0.55) !important;
+        transform: scale(1.06);
+        animation: pulseSpeakingStep 1.1s ease-in-out infinite alternate;
+    }
+
+    @keyframes pulseSpeakingStep {
+        0% { box-shadow: 0 0 8px rgba(56, 189, 248, 0.3); }
+        100% { box-shadow: 0 0 22px rgba(56, 189, 248, 0.85); }
+    }
+
+    .step-arrow {
+        color: #475569;
+        font-size: 12px;
+        font-weight: 800;
     }
 
     /* High Visibility Realtime Subtitles */
@@ -305,6 +456,12 @@ if "placed_order_info" not in st.session_state:
 if "show_order_modal" not in st.session_state:
     st.session_state.show_order_modal = False
 
+if "mic_key_idx" not in st.session_state:
+    st.session_state.mic_key_idx = 0
+
+if "_last_processed_audio_hash" not in st.session_state:
+    st.session_state._last_processed_audio_hash = None
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Sidebar: Quick Menu Explorer (Manual Addition Kept & Fixed)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -403,106 +560,229 @@ with col_left:
     st.markdown("<h2 style='margin-bottom: 2px; color: #ffffff;'>👨‍🍳 Chef Voice Agent</h2>", unsafe_allow_html=True)
     st.caption("Speak to order food & drinks, ask questions, or customize items.")
 
-    # Voice Agent Movement Icon & Animation
-    orb_class = "agent-orb"
-    if st.session_state.agent_mode == "listening":
-        orb_class += " listening"
-        orb_icon = "🎙️"
-        status_color = "#fb7185"
-    elif st.session_state.agent_mode == "speaking":
-        orb_class += " speaking"
-        orb_icon = "🔊"
-        status_color = "#38bdf8"
-    else:
-        orb_icon = "👨‍🍳"
-        status_color = "#34d399"
+    # Dynamic Voice Stage Renderer (Interactive Realtime Visualizer)
+    def get_voice_stage_html(mode="idle", status_text=None):
+        if mode == "listening":
+            orb_class = "agent-orb listening"
+            orb_icon = "🎙️"
+            status_color = "#fbbf24"
+            wave_class = "soundwave-bars listening"
+            default_label = "Listening for your voice... Speak naturally"
+            active_step = "understanding"
+        elif mode == "user_speaking":
+            orb_class = "agent-orb user-speaking"
+            orb_icon = "🗣️"
+            status_color = "#f43f5e"
+            wave_class = "soundwave-bars user-speaking"
+            default_label = "Hearing your voice... (Processing speech)"
+            active_step = "understanding"
+        elif mode == "understanding":
+            orb_class = "agent-orb understanding"
+            orb_icon = "🧠"
+            status_color = "#c084fc"
+            wave_class = "soundwave-bars understanding"
+            default_label = "Agent is understanding what you said..."
+            active_step = "understanding"
+        elif mode == "checking":
+            orb_class = "agent-orb checking"
+            orb_icon = "📋"
+            status_color = "#fbbf24"
+            wave_class = "soundwave-bars checking"
+            default_label = "Agent is checking the menu & orders..."
+            active_step = "checking"
+        elif mode == "speaking":
+            orb_class = "agent-orb speaking"
+            orb_icon = "🔊"
+            status_color = "#38bdf8"
+            wave_class = "soundwave-bars speaking"
+            default_label = "Chef is speaking aloud..."
+            active_step = "speaking"
+        else:  # idle
+            orb_class = "agent-orb"
+            orb_icon = "👨‍🍳"
+            status_color = "#34d399"
+            wave_class = "soundwave-bars"
+            default_label = "Chef is Ready — Tap microphone below to speak"
+            active_step = "idle"
 
-    st.markdown(f"""
-    <div class="voice-stage">
-        <div class="orb-wrapper">
-            <div class="pulse-ring"></div>
-            <div class="pulse-ring"></div>
-            <div class="{orb_class}">
-                {orb_icon}
+        label = status_text or default_label
+
+        p_und = "active-understanding" if active_step == "understanding" else ""
+        p_chk = "active-checking" if active_step == "checking" else ""
+        p_spk = "active-speaking" if active_step == "speaking" else ""
+
+        return f"""
+        <div class="voice-stage">
+            <div class="orb-wrapper">
+                <div class="pulse-ring"></div>
+                <div class="pulse-ring"></div>
+                <div class="{orb_class}">
+                    {orb_icon}
+                </div>
+            </div>
+            <div class="{wave_class}">
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+                <div class="soundwave-bar"></div>
+            </div>
+            <div class="agent-status-label" style="color: {status_color};">
+                ● {label}
+            </div>
+            <div class="agent-step-pipeline">
+                <span class="step-pill {p_und}">🧠 1. Understanding</span>
+                <span class="step-arrow">→</span>
+                <span class="step-pill {p_chk}">📋 2. Checking Menu & Orders</span>
+                <span class="step-arrow">→</span>
+                <span class="step-pill {p_spk}">🔊 3. Chef Speaking</span>
             </div>
         </div>
-        <div class="soundwave-bars">
-            <div class="soundwave-bar"></div>
-            <div class="soundwave-bar"></div>
-            <div class="soundwave-bar"></div>
-            <div class="soundwave-bar"></div>
-            <div class="soundwave-bar"></div>
-        </div>
-        <div class="agent-status-label" style="color: {status_color};">
-            ● {st.session_state.agent_status}
-        </div>
+        """
+
+    voice_stage_slot = st.empty()
+    voice_stage_slot.markdown(
+        get_voice_stage_html(st.session_state.agent_mode, st.session_state.agent_status),
+        unsafe_allow_html=True
+    )
+
+    def set_agent_ui_state(mode: str, label: str):
+        st.session_state.agent_mode = mode
+        st.session_state.agent_status = label
+        voice_stage_slot.markdown(get_voice_stage_html(mode, label), unsafe_allow_html=True)
+
+    # Seamless Real-time Voice Audio Playback in Browser (No visible audio player bar or pop-up)
+    if getattr(st.session_state, "browser_speech_wav", None):
+        audio_b64 = base64.b64encode(st.session_state.browser_speech_wav).decode()
+        st.markdown(
+            f"""
+            <audio id="chef-voice-player" autoplay style="display:none;">
+                <source src="data:audio/wav;base64,{audio_b64}" type="audio/wav">
+            </audio>
+            <script>
+            (function() {{
+                var audio = document.getElementById('chef-voice-player');
+                if (audio) {{
+                    audio.onended = function() {{
+                        // Smoothly transition orb back to ready state when chef finishes speaking
+                        var orb = document.querySelector('.agent-orb');
+                        if (orb) {{
+                            orb.className = 'agent-orb';
+                            orb.innerHTML = '👨‍🍳';
+                        }}
+                        var lbl = document.querySelector('.agent-status-label');
+                        if (lbl) {{
+                            lbl.style.color = '#34d399';
+                            lbl.innerHTML = '● Chef is Ready — Tap microphone below to speak';
+                        }}
+                        var waves = document.querySelector('.soundwave-bars');
+                        if (waves) {{
+                            waves.className = 'soundwave-bars';
+                        }}
+                        var pills = document.querySelectorAll('.step-pill');
+                        pills.forEach(function(p) {{
+                            p.classList.remove('active-speaking', 'active-understanding', 'active-checking');
+                        }});
+                    }};
+                }}
+            }})();
+            </script>
+            """,
+            unsafe_allow_html=True
+        )
+        st.session_state.browser_speech_wav = None
+
+    # Helper to process voice turns (prevents duplicate speech & infinite loops)
+    def handle_voice_audio(audio_data, source="browser"):
+        # Step 1: Agent is Understanding
+        set_agent_ui_state("understanding", "Agent is understanding what you said...")
+        status_slot = st.empty()
+        status_slot.info("🧠 Transcribing your voice with Whisper...")
+        transcript = st.session_state.stt.transcribe(audio_data)
+
+        if transcript:
+            st.session_state.customer_subtitle = transcript
+            st.session_state.customer_time = time.strftime("%H:%M:%S")
+
+            # Step 2: Agent is Checking Menu & Orders
+            set_agent_ui_state("checking", "Agent is checking the menu & orders...")
+            status_slot.warning("📋 Checking menu catalog, prices, and kitchen order tray...")
+            reply = st.session_state.agent.process_turn(transcript)
+
+            st.session_state.chef_subtitle = reply
+            st.session_state.chef_time = time.strftime("%H:%M:%S")
+
+            # Check if order was submitted during voice interaction
+            if getattr(st.session_state.cart, "last_placed_order", None) and st.session_state.cart.is_submitted:
+                st.session_state.placed_order_info = st.session_state.cart.last_placed_order
+                st.session_state.last_order_num = st.session_state.placed_order_info.get("order_number")
+                st.session_state.show_order_modal = True
+                st.session_state.cart.is_submitted = False
+
+            # Step 3: Chef is Speaking Aloud
+            set_agent_ui_state("speaking", "Chef is speaking aloud...")
+
+            # Synthesize audio exclusively for browser playback
+            try:
+                synth = st.session_state.tts.synthesize_audio(reply)
+                if synth is not None:
+                    audio_out, sr_out = synth
+                    wav_buf = io.BytesIO()
+                    sf.write(wav_buf, audio_out, sr_out, format="WAV")
+                    st.session_state.browser_speech_wav = wav_buf.getvalue()
+                else:
+                    st.session_state.tts.speak(reply)
+            except Exception:
+                st.session_state.tts.speak(reply)
+
+            # Keep in speaking state on rerun while browser plays audio
+            st.session_state.agent_mode = "speaking"
+            st.session_state.agent_status = "Chef speaking aloud..."
+            status_slot.empty()
+            st.rerun()
+        else:
+            status_slot.warning("Couldn't catch that — please speak again.")
+            set_agent_ui_state("idle", "Chef is Ready — Tap microphone below to speak")
+
+    # Insecure context warning for remote VM access over plain HTTP
+    st.markdown("""
+    <div id="mic-security-notice" style="display:none; margin: 6px 0 12px 0; padding: 10px 14px; background: rgba(239, 68, 68, 0.15); border: 1px solid #ef4444; border-radius: 12px; font-size: 13px; color: #fca5a5;">
+      🔒 <strong>Microphone Blocked by Browser:</strong> Chrome and Edge require <strong>HTTPS</strong> to access the microphone on remote servers. If testing via plain HTTP/IP, enable this URL in <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>.
     </div>
+    <script>
+    if (!window.isSecureContext && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+      var el = document.getElementById('mic-security-notice');
+      if (el) el.style.display = 'block';
+    }
+    </script>
     """, unsafe_allow_html=True)
 
-    # Primary Voice Trigger Button (Clean, Single Action)
-    trigger_voice = st.button("🎤 Tap to Speak to Chef", type="primary", use_container_width=True)
-
-    if trigger_voice:
-        st.session_state.agent_mode = "listening"
-        st.session_state.agent_status = "Listening to your voice..."
-        
-        status_slot = st.empty()
-        status_slot.info("🎙️ Listening... Speak naturally.")
-        
-        def on_speech_start():
-            status_slot.warning("🎙️ Recording your voice...")
-            
-        def on_speech_end():
-            status_slot.info("⏳ Processing...")
-            
-        audio = st.session_state.vad.listen_and_record_speech(
-            on_speech_start=on_speech_start,
-            on_speech_end=on_speech_end,
-            timeout=12.0
-        )
-        
-        if audio is not None:
-            status_slot.info("Understanding what you said...")
-            transcript = st.session_state.stt.transcribe(audio)
-            
-            if transcript:
-                st.session_state.customer_subtitle = transcript
-                st.session_state.customer_time = time.strftime("%H:%M:%S")
-                
-                status_slot.warning("Chef is thinking...")
-                reply = st.session_state.agent.process_turn(transcript)
-                
-                st.session_state.chef_subtitle = reply
-                st.session_state.chef_time = time.strftime("%H:%M:%S")
-                st.session_state.agent_mode = "speaking"
-                st.session_state.agent_status = "Chef speaking aloud..."
-
-                # Check if order was submitted during voice interaction
-                if getattr(st.session_state.cart, "last_placed_order", None) and st.session_state.cart.is_submitted:
-                    st.session_state.placed_order_info = st.session_state.cart.last_placed_order
-                    st.session_state.last_order_num = st.session_state.placed_order_info.get("order_number")
-                    st.session_state.show_order_modal = True
-                    st.session_state.cart.is_submitted = False
-                
-                # Speak aloud via Piper TTS
-                st.session_state.tts.speak(reply)
-                
-                st.session_state.agent_mode = "idle"
-                st.session_state.agent_status = "Chef is Ready"
-                status_slot.empty()
-                st.rerun()
-            else:
-                status_slot.warning("Couldn't catch that — please try speaking again.")
-                st.session_state.agent_mode = "idle"
-                st.session_state.agent_status = "Chef is Ready"
-        else:
-            status_slot.warning("No voice detected — please tap again and speak.")
-            st.session_state.agent_mode = "idle"
-            st.session_state.agent_status = "Chef is Ready"
+    # Unified Browser Voice Interface (Seamless Real-time Voice Intelligence)
+    mic_idx = st.session_state.get("mic_key_idx", 0)
+    browser_audio = st.audio_input(
+        "🎙️ Tap to Speak (Browser Microphone)",
+        key=f"browser_mic_{mic_idx}"
+    )
+    if browser_audio is not None:
+        audio_bytes = browser_audio.getvalue()
+        audio_hash = hashlib.sha256(audio_bytes).hexdigest()
+        if audio_hash != st.session_state.get("_last_processed_audio_hash"):
+            st.session_state._last_processed_audio_hash = audio_hash
+            st.session_state.mic_key_idx = mic_idx + 1
+            set_agent_ui_state("user_speaking", "Hearing your voice... (Processing)")
+            try:
+                raw_data, sr = sf.read(io.BytesIO(audio_bytes))
+                if raw_data.ndim > 1:
+                    raw_data = raw_data.mean(axis=1)
+                if sr != 16000:
+                    raw_data = scipy.signal.resample(raw_data, int(len(raw_data) * 16000 / sr))
+                handle_voice_audio(raw_data.astype(np.float32), source="browser")
+            except Exception as e:
+                st.error(f"Error reading browser audio: {e}")
 
     # Real-time Subtitles Area (High-Contrast, Clean & Large)
     st.markdown("<h3 style='margin-top: 24px; margin-bottom: 12px; color: #f8fafc;'>💬 Live Subtitles</h3>", unsafe_allow_html=True)
-    
+
     # Customer Subtitle
     if st.session_state.customer_subtitle:
         st.markdown(f"""
@@ -527,65 +807,53 @@ with col_left:
         </div>
         """, unsafe_allow_html=True)
 
+    # Helper for quick demo queries (clean, no repeating)
+    def send_demo_query(query_text):
+        st.session_state.customer_subtitle = query_text
+        st.session_state.customer_time = time.strftime("%H:%M:%S")
+        set_agent_ui_state("checking", "Agent is checking the menu & orders...")
+        reply = st.session_state.agent.process_turn(query_text)
+        st.session_state.chef_subtitle = reply
+        st.session_state.chef_time = time.strftime("%H:%M:%S")
+        if getattr(st.session_state.cart, "last_placed_order", None) and st.session_state.cart.is_submitted:
+            st.session_state.placed_order_info = st.session_state.cart.last_placed_order
+            st.session_state.last_order_num = st.session_state.placed_order_info.get("order_number")
+            st.session_state.show_order_modal = True
+            st.session_state.cart.is_submitted = False
+        try:
+            synth = st.session_state.tts.synthesize_audio(reply)
+            if synth is not None:
+                audio_out, sr_out = synth
+                wav_buf = io.BytesIO()
+                sf.write(wav_buf, audio_out, sr_out, format="WAV")
+                st.session_state.browser_speech_wav = wav_buf.getvalue()
+            else:
+                st.session_state.tts.speak(reply)
+        except Exception:
+            st.session_state.tts.speak(reply)
+        st.session_state.agent_mode = "speaking"
+        st.session_state.agent_status = "Chef speaking aloud..."
+        st.rerun()
+
     # Quick Demo Voice Queries for Easy Testing
     st.markdown("<p style='font-size: 13px; color: #94a3b8; margin-top: 18px; margin-bottom: 8px;'>Demo sample queries:</p>", unsafe_allow_html=True)
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         if st.button("🍨 See Soft Ice", use_container_width=True):
-            st.session_state.customer_subtitle = "I want to see all items in soft ice"
-            st.session_state.customer_time = time.strftime("%H:%M:%S")
-            reply = st.session_state.agent.process_turn("I want to see all items in soft ice")
-            st.session_state.chef_subtitle = reply
-            st.session_state.chef_time = time.strftime("%H:%M:%S")
-            st.session_state.tts.speak(reply)
-            st.rerun()
+            send_demo_query("I want to see all items in soft ice")
     with c2:
         if st.button("🥤 Latte Float", use_container_width=True):
-            st.session_state.customer_subtitle = "Can I get one Cafe Latte Float with less ice?"
-            st.session_state.customer_time = time.strftime("%H:%M:%S")
-            reply = st.session_state.agent.process_turn("Can I get one Cafe Latte Float with less ice?")
-            st.session_state.chef_subtitle = reply
-            st.session_state.chef_time = time.strftime("%H:%M:%S")
-            st.session_state.tts.speak(reply)
-            st.rerun()
+            send_demo_query("Can I get one Cafe Latte Float with less ice?")
     with c3:
         if st.button("☕ Hot Drinks", use_container_width=True):
-            st.session_state.customer_subtitle = "get me the options of hot drinks"
-            st.session_state.customer_time = time.strftime("%H:%M:%S")
-            reply = st.session_state.agent.process_turn("get me the options of hot drinks")
-            st.session_state.chef_subtitle = reply
-            st.session_state.chef_time = time.strftime("%H:%M:%S")
-            st.session_state.tts.speak(reply)
-            st.rerun()
+            send_demo_query("get me the options of hot drinks")
     with c4:
         if getattr(st.session_state.cart, "confirmation_requested", False):
             if st.button("✅ Yes, Place It!", type="primary", use_container_width=True):
-                st.session_state.customer_subtitle = "Yes, please place the order"
-                st.session_state.customer_time = time.strftime("%H:%M:%S")
-                reply = st.session_state.agent.process_turn("yes")
-                st.session_state.chef_subtitle = reply
-                st.session_state.chef_time = time.strftime("%H:%M:%S")
-                if getattr(st.session_state.cart, "last_placed_order", None) and st.session_state.cart.is_submitted:
-                    st.session_state.placed_order_info = st.session_state.cart.last_placed_order
-                    st.session_state.last_order_num = st.session_state.placed_order_info.get("order_number")
-                    st.session_state.show_order_modal = True
-                    st.session_state.cart.is_submitted = False
-                st.session_state.tts.speak(reply)
-                st.rerun()
+                send_demo_query("yes")
         else:
             if st.button("🛍️ Place Order", use_container_width=True):
-                st.session_state.customer_subtitle = "Place the order"
-                st.session_state.customer_time = time.strftime("%H:%M:%S")
-                reply = st.session_state.agent.process_turn("place the order")
-                st.session_state.chef_subtitle = reply
-                st.session_state.chef_time = time.strftime("%H:%M:%S")
-                if getattr(st.session_state.cart, "last_placed_order", None) and st.session_state.cart.is_submitted:
-                    st.session_state.placed_order_info = st.session_state.cart.last_placed_order
-                    st.session_state.last_order_num = st.session_state.placed_order_info.get("order_number")
-                    st.session_state.show_order_modal = True
-                    st.session_state.cart.is_submitted = False
-                st.session_state.tts.speak(reply)
-                st.rerun()
+                send_demo_query("place the order")
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Right: Active Order Tray (Cart is stored in session, persists on refresh)
@@ -649,19 +917,29 @@ with col_right:
                     st.rerun()
                     
             with col_place:
-                btn_label = "✅ Place Order" if not getattr(cart, "confirmation_requested", False) else "✅ Yes, Confirm & Place"
-                if st.button(btn_label, type="primary", use_container_width=True):
-                    res = cart.confirm_and_submit()
-                    order_num = res.get("order_number")
-                    total = res.get("total")
-                    st.session_state.last_order_num = order_num
-                    st.session_state.placed_order_info = cart.last_placed_order
-                    st.session_state.show_order_modal = True
-                    st.session_state.customer_subtitle = "Confirm and place my order"
-                    st.session_state.customer_time = time.strftime("%H:%M:%S")
-                    st.session_state.chef_subtitle = f"Thank you! Your order #{order_num} has been placed for {total:.3f} BHD. Please proceed to the counter."
-                    st.session_state.chef_time = time.strftime("%H:%M:%S")
-                    st.rerun()
+                if not getattr(cart, "confirmation_requested", False):
+                    if st.button("🛍️ Place Order", type="primary", use_container_width=True):
+                        st.session_state.customer_subtitle = "Place the order"
+                        st.session_state.customer_time = time.strftime("%H:%M:%S")
+                        reply = st.session_state.agent.process_turn("place the order")
+                        st.session_state.chef_subtitle = reply
+                        st.session_state.chef_time = time.strftime("%H:%M:%S")
+                        st.session_state.tts.speak(reply)
+                        st.rerun()
+                else:
+                    if st.button("✅ Yes, Confirm & Place", type="primary", use_container_width=True):
+                        st.session_state.customer_subtitle = "Yes, please place the order"
+                        st.session_state.customer_time = time.strftime("%H:%M:%S")
+                        reply = st.session_state.agent.process_turn("place the order")
+                        st.session_state.chef_subtitle = reply
+                        st.session_state.chef_time = time.strftime("%H:%M:%S")
+                        if getattr(cart, "last_placed_order", None) and cart.is_submitted:
+                            st.session_state.placed_order_info = cart.last_placed_order
+                            st.session_state.last_order_num = st.session_state.placed_order_info.get("order_number")
+                            st.session_state.show_order_modal = True
+                            cart.is_submitted = False
+                        st.session_state.tts.speak(reply)
+                        st.rerun()
 
     # Confirmed Order Ticket Display
     if st.session_state.get("placed_order_info"):

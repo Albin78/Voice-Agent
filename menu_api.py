@@ -3,6 +3,7 @@ import json
 import logging
 from typing import List, Dict, Any, Optional
 from config import Config
+from auth import get_token_manager
 
 logger = logging.getLogger("MenuAPI")
 
@@ -86,13 +87,8 @@ class MenuAPIClient:
         self._products_cache: Optional[List[Dict[str, Any]]] = None
 
     def _get_auth_headers(self) -> Dict[str, str]:
-        Config.reload_env()
-        token = Config.API_TOKEN.strip()
-        headers = {"Content-Type": "application/json"}
-        if token:
-            # Bearer token header
-            headers["Authorization"] = f"Bearer {token}" if not token.lower().startswith("bearer ") else token
-        return headers
+        # Always returns a valid token (auto login/refresh when expired)
+        return get_token_manager().auth_headers()
 
     def get_categories(self) -> Dict[str, Any]:
         """Fetch categories from PRODUCTS_CATEGORY_URL."""
@@ -100,7 +96,7 @@ class MenuAPIClient:
         url = Config.PRODUCTS_CATEGORY_URL
 
         try:
-            resp = requests.get(url, headers=self._get_auth_headers(), timeout=5)
+            resp = get_token_manager().request("GET", url, timeout=5)
             if resp.status_code == 200:
                 data = resp.json()
                 cats = data.get("data", []) if isinstance(data, dict) else data
@@ -142,12 +138,11 @@ class MenuAPIClient:
 
         if not self.force_mock:
             try:
-                headers = self._get_auth_headers()
                 params = {}
                 if category_id:
                     params["productCategoryId"] = category_id
 
-                resp = requests.get(url, headers=headers, params=params, timeout=5)
+                resp = get_token_manager().request("GET", url, params=params, timeout=5)
                 if resp.status_code == 200:
                     res_json = resp.json()
                     raw_products = res_json.get("data", []) if isinstance(res_json, dict) else res_json
@@ -220,10 +215,16 @@ class MenuAPIClient:
                         }
             except Exception as e:
                 logger.error(f"Error fetching products from API: {e}")
-                if not Config.ENABLE_MOCK_FALLBACK:
+                if not Config.ENABLE_MOCK_FALLBACK and not self.force_mock:
                     return {"success": False, "error": f"API error: {e}. Please check touch screen or call staff."}
 
-        # Fallback to realistic mock menu
+        # Fallback to realistic mock menu ONLY if mock fallback is explicitly enabled
+        if not Config.ENABLE_MOCK_FALLBACK and not self.force_mock:
+            return {
+                "success": False,
+                "error": "Products API request failed and fallback dummy data is disabled. Please check API token in .env.development."
+            }
+
         products = []
         for p in SAMPLE_PRODUCTS:
             if not p.get("isActive", True):
@@ -256,6 +257,8 @@ class MenuAPIClient:
     def search_product(self, query: str) -> Dict[str, Any]:
         """Search products by customer query or keyword with relevance scoring."""
         import re
+        from difflib import SequenceMatcher
+
         q = query.strip().lower()
         if not q:
             return {"success": True, "found": False, "products": []}
@@ -266,7 +269,8 @@ class MenuAPIClient:
             return res
 
         all_products = res.get("products", [])
-        q_words = [w for w in re.findall(r'\w+', q) if len(w) > 2]
+        q_words = [w for w in re.findall(r'\w+', q) if len(w) > 1]
+        stemmed_q = [w.rstrip('s') for w in q_words]
         scored_products = []
 
         for p in all_products:
@@ -275,27 +279,62 @@ class MenuAPIClient:
             cat = p.get("category", "").lower()
             desc = p.get("description", "").lower()
 
+            p_words = [w for w in re.findall(r'\w+', name) if len(w) > 1]
+            stemmed_p = [w.rstrip('s') for w in p_words]
+            cat_words = [w.rstrip('s') for w in re.findall(r'\w+', cat) if len(w) > 1]
+
+            # 1. Exact or direct phrase matching
             if q == name:
-                score = 150
+                score += 200
             elif q == cat:
-                score = 120
+                score += 150
             elif q in name:
-                score += 70
+                score += 100
             elif q in cat or cat in q:
-                score += 60
+                score += 70
             elif q in desc:
                 score += 35
 
-            # Word boundary matching
-            for w in q_words:
-                if re.search(r'\b' + re.escape(w) + r'\b', name):
-                    score += 25
-                elif re.search(r'\b' + re.escape(w) + r'\b', cat):
-                    score += 25
-                elif re.search(r'\b' + re.escape(w) + r'\b', desc):
-                    score += 15
+            # 2. Word-level matching with stemming and typo tolerance
+            matched_words_count = 0
+            for sq in stemmed_q:
+                matched_this_word = False
+                # Check in product name words
+                for sp in stemmed_p:
+                    if sq == sp:
+                        score += 45
+                        matched_this_word = True
+                        break
+                    elif len(sq) > 3 and len(sp) > 3 and (sq in sp or sp in sq):
+                        score += 35
+                        matched_this_word = True
+                        break
+                    elif len(sq) > 3 and len(sp) > 3 and SequenceMatcher(None, sq, sp).ratio() >= 0.80:
+                        # Typo tolerance: e.g. choclate -> chocolate, vanila -> vanilla
+                        score += 40
+                        matched_this_word = True
+                        break
 
-            if score > 0:
+                # Check in category words
+                if not matched_this_word:
+                    for cw in cat_words:
+                        if sq == cw or (len(sq) > 3 and (sq in cw or cw in sq)):
+                            score += 30
+                            matched_this_word = True
+                            break
+
+                if matched_this_word:
+                    matched_words_count += 1
+
+            # 3. Multi-word match bonus (e.g. matching both 'chocolate' and 'shake' >> matching just 'chocolate')
+            if len(stemmed_q) > 1 and matched_words_count >= len(stemmed_q):
+                score += 90
+            elif len(stemmed_q) > 1 and matched_words_count > 1:
+                score += 40 * matched_words_count
+
+            # Minimum score threshold: a product must achieve at least 40 points to be considered
+            # a match. This prevents marginally related items from polluting results.
+            if score >= 40:
                 scored_products.append((score, p))
 
         # Sort products by score descending
@@ -311,14 +350,39 @@ class MenuAPIClient:
                 "message": f"No available product found matching '{query}'."
             }
 
+        top_match = results[0]
+        query_clean = q.strip().lower()
+        top_name_lower = top_match['name'].lower()
+
+        # Determine if this is an exact match (customer said exactly the product name or it's a direct substring)
+        is_exact_match = (
+            query_clean == top_name_lower
+            or top_name_lower in query_clean
+            or query_clean in top_name_lower
+        )
+
+        if is_exact_match:
+            hint = (
+                f"EXACT MATCH FOUND: Call add_item(product_name='{top_match['name']}', quantity=1) immediately. "
+                f"Do NOT add any other products. Only add '{top_match['name']}'."
+            )
+        else:
+            hint = (
+                f"FUZZY MATCH: The closest product to '{query}' is '{top_match['name']}' ({top_match['price']} BHD). "
+                f"IMPORTANT: Do NOT call add_item yet. Instead, say: "
+                f"'Did you mean {top_match['name']} for {top_match['price']} BHD? Shall I add that to your cart?' "
+                f"Wait for customer confirmation before calling add_item. NEVER add a fuzzy-matched item without confirmation."
+            )
+
         # Return at most 3 options as per prompt rule: 'mention at most 3 and ask which one'
         return {
             "success": True,
             "found": True,
             "query": query,
+            "is_exact_match": is_exact_match,
             "products": results[:3],
             "total_matches": len(results),
-            "hint": f"Available options matching '{query}'. If customer asked to order or have this, immediately call add_item(product_name='{results[0]['name']}', quantity=1). Otherwise if they are just browsing, mention at most 3 options."
+            "hint": hint
         }
 
     def get_addons(self, item_name: Optional[str] = None) -> Dict[str, Any]:

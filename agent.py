@@ -44,6 +44,12 @@ TOOL_NAME_MAP = {
     "empty_cart": "clear_cart",
     "call_staff": "call_staff",
     "callstaff": "call_staff",
+    "update_quantity": "update_quantity",
+    "updatequantity": "update_quantity",
+    "set_quantity": "update_quantity",
+    "setquantity": "update_quantity",
+    "add_more": "add_more",
+    "addmore": "add_more",
 }
 
 
@@ -200,6 +206,52 @@ def format_friendly_reply_if_code(text: str, cart: OrderCart) -> str:
 
     return "I've updated your order. What else can I get for you today?"
 
+
+def condense_long_spoken_list(text: str) -> str:
+    """
+    If an agent response enumerates more than 3 items with prices in a single speech turn,
+    condense it to the top 3 items to preserve voice clarity and prevent customer cognitive overload.
+    Example: 9 cold drinks enumerated -> Top 3 + 'plus more options on the screen. Which one would you like?'
+    """
+    if not text:
+        return text
+
+    pattern = re.compile(
+        r'(?:(?:we\s+(?:also\s+)?have|options\s+include|like|and)\s+)?'
+        r'([A-Za-z0-9\s\-]+?)\s+(?:for|at)\s+(\d+(?:\.\d+)?)\s*BHD',
+        re.IGNORECASE
+    )
+    matches = list(pattern.finditer(text))
+    if len(matches) <= 3:
+        return text
+
+    intro_match = re.match(
+        r'^(.*?\b(?:we\s+(?:also\s+)?have|choices\s+include|options\s+are|popular\s+choices\s+include)\b)',
+        text,
+        re.IGNORECASE
+    )
+    if intro_match:
+        intro = intro_match.group(1).strip() + " "
+    else:
+        intro = "We also have "
+
+    top_3 = matches[:3]
+    parts = []
+    for m in top_3:
+        item_name = m.group(1).strip()
+        item_name = re.sub(r'^(?:and\s+|we\s+(?:also\s+)?have\s+)', '', item_name, flags=re.IGNORECASE).strip()
+        price = m.group(2)
+        parts.append(f"{item_name} for {price} BHD")
+
+    top_str = ", ".join(parts[:-1]) + f", and {parts[-1]}"
+
+    last_end = matches[-1].end()
+    trailing = text[last_end:].strip()
+    q_match = re.search(r'([A-Z][^.!?]*\?)$', trailing)
+    question = q_match.group(1) if q_match else "Which one would you like?"
+
+    return f"{intro}{top_str}, plus more options on the screen. {question}"
+
 # ---------------------------------------------------------------------------
 # Pre-LLM pattern matching — evaluated BEFORE sending to the model.
 # These catch common cases instantly, saving a full LLM round-trip.
@@ -269,7 +321,23 @@ _CLEAR_CART_RE = re.compile(
 
 # Remove specific item pattern
 _REMOVE_ITEM_RE = re.compile(
-    r'^(?:please\s+)?(?:remove|take\s+off|cancel|delete)\s+(?:the\s+|my\s+|a\s+|an\s+|one\s+)?([A-Za-z0-9 ]+?)(?:\s+from\s+(?:my\s+|the\s+)?(?:cart|order))?$',
+    r'^(?:please\s+)?(?:remove|take\s+off|cancel|delete)\s+(.+?)(?:\s+from\s+(?:my\s+|the\s+)?(?:cart|order))?$',
+    re.IGNORECASE
+)
+
+# Ordering / Add item intent pattern — catches explicit ordering speech
+_ADD_ITEM_INTENT_RE = re.compile(
+    r'^(?:please\s+)?'
+    r'(?:'
+    r'add|'
+    r'can\s+(?:i|you)\s+(?:get|have|add)|'
+    r'i\s+(?:want|would\s+like|\x27d\s+like|\x27ll\s+take|need|\x27m\s+going\s+to\s+have|am\s+going\s+to\s+have|\x27ll\s+go\s+with|\x27m\s+going\s+for)|'
+    r'give\s+me|'
+    r'get\s+me|'
+    r'(?:i\x27ll|i\s+will)\s+(?:have|take|get|go\s+with)'
+    r')\s+'
+    r'(.+?)'
+    r'(?:\s+(?:to|in|into)\s+(?:my\s+|the\s+)?(?:cart|order))?$',
     re.IGNORECASE
 )
 
@@ -279,6 +347,8 @@ _OPTIONS_QUERY_RE = re.compile(
     r'options?(?:\s+(?:of|for|in|available))?|'
     r'get\s+me\s+(?:the\s+)?options|'
     r'give\s+me\s+(?:the\s+)?options|'
+    r'what\s+are\s+(?:the\s+)?(?:other\s+)?(?:available\s+)?(?:hot|cold|soft\s+ice|float|shake|kakigori)?\s*(?:drinks?|items?|beverages?|coffees?|options?)(?:\s+(?:available|there))?|'
+    r'what\s+(?:other\s+)?(?:hot|cold|soft\s+ice|float|shake|kakigori)?\s*(?:drinks?|items?|beverages?|coffees?|options?)\s*(?:are\s+available|do\s+you\s+have)|'
     r'what\s+are\s+(?:the\s+)?options|'
     r'show\s+(?:me\s+)?(?:the\s+)?options|'
     r'tell\s+(?:me\s+)?(?:the\s+)?options|'
@@ -286,6 +356,7 @@ _OPTIONS_QUERY_RE = re.compile(
     r'what\s+(?:kinds?\s+of\s+|types?\s+of\s+)?(?:hot|cold|soft\s+ice|drinks?|coffees?|food|dessert|float|shake|kakigori).*?do\s+you\s+have|'
     r'what\s+(?:do\s+you\s+have|are\s+your)\s+in\b|'
     r'what\s+do\s+you\s+have\s+for\b|'
+    r'what\s+else\s+do\s+you\s+have|'
     r'see\s+all\s+items|view\s+all\s+items|list\s+all\s+items|'
     r'what\s+(?:hot|cold)\s+drinks\s+do\s+you\s+have|'
     r'show\s+me\s+(?:all\s+)?(?:the\s+)?(?:hot\s+drinks|cold\s+drinks|soft\s+ice|floats?|shakes?|kakigori|menu)|'
@@ -307,21 +378,25 @@ _CATEGORY_MAP = [
 # Order checkout and placement pattern
 _PLACE_ORDER_RE = re.compile(
     r'\b('
-    r'place\s+(?:the\s+|my\s+)?order|'
-    r'confirm\s+(?:the\s+|my\s+)?order|'
-    r'submit\s+(?:the\s+|my\s+)?order|'
-    r'checkout|finalize\s+(?:the\s+|my\s+)?order|'
-    r'complete\s+(?:the\s+|my\s+)?order|'
-    r'that(?:\x27s|\s+is)\s+all(?:,\s*place\s+(?:the\s+|my\s+)?order)?|'
+    r'place\s+(?:the\s+|my\s+|this\s+|that\s+)?order|'
+    r'confirm\s+(?:the\s+|my\s+|this\s+|that\s+)?order|'
+    r'submit\s+(?:the\s+|my\s+|this\s+|that\s+)?order|'
+    r'checkout|finalize\s+(?:the\s+|my\s+|this\s+|that\s+)?order|'
+    r'complete\s+(?:the\s+|my\s+|this\s+|that\s+)?order|'
+    r'that(?:\x27s|\s+is)\s+all(?:,\s*place\s+(?:the\s+|my\s+|this\s+|that\s+)?order)?|'
     r'check\s+please|i(?:\x27m|\s+am)\s+done(?:\s+ordering)?|'
-    r'order\s+please'
+    r'order\s+please|place\s+it\b|order\s+now\b'
     r')\b',
     re.IGNORECASE
 )
 
 # Confirmation response patterns (when agent asked "Shall I place this order?")
 _CONFIRMATION_YES_RE = re.compile(
-    r'^(?:yes|yeah|yep|sure|ok|okay|please|confirm|place it|place the order|go ahead|proceed|do it|sounds good|yes please|yes place it|yes place the order|confirm it)(?:[\s.!,].*)?$',
+    r'^(?:yes|yeah|yep|sure|ok|okay|please|confirm|confirm it|confirm order|'
+    r'place it|place the order|place this order|place that order|place order|'
+    r'go ahead|proceed|do it|sounds good|yes please|yes place it|yes place the order|'
+    r'yes place this order|yes place that order|that(?:\x27s|\s+is)\s+(?:right|correct|fine|good)|'
+    r'correct|all good|perfect)(?:[\s.!,].*)?$',
     re.IGNORECASE
 )
 
@@ -386,6 +461,7 @@ class ChefAgent:
         self.off_topic_count: int = 0
         self.welcome_given: bool = False
         self.last_offered_suggestion: Optional[str] = None
+        self.pending_item_to_add: Optional[Dict[str, Any]] = None
         self.messages: List[Dict[str, Any]] = []
 
         self._init_system_prompt()
@@ -408,9 +484,12 @@ MANDATORY INTENT DISAMBIGUATION RULES (CRITICAL):
 
 2. ORDERING / PURCHASING INTENT:
    - When the customer clearly asks to BUY, HAVE, GET, or ADD an item (e.g. "I want a vanilla soft ice", "give me one latte", "add hot green tea", "two coffees", "a croissant"):
-     --> You MUST IMMEDIATELY call `add_item` with `product_name`, `quantity`, and any `notes` (such as "less sugar", "extra ice").
-     --> CRITICAL: "get me an Americano" is ORDERING, but "get me the options of hot drinks" is BROWSING!
-     --> NEVER ask questions before adding—call `add_item` directly! Do not call search or get_products when ordering.
+     --> First call `search_product(query=<item name>)` to look up the exact catalog name.
+     --> If the search result says 'EXACT MATCH FOUND', call `add_item` immediately with the exact catalog product_name.
+     --> If the search result says 'FUZZY MATCH' or 'needs_confirmation', do NOT call add_item. Instead ask the customer:
+         "Did you mean <product name> for <price> BHD? Shall I add that to your cart?"
+     --> Only call `add_item` AFTER the customer confirms with yes/sure/go ahead/please.
+     --> CRITICAL: NEVER add more than ONE item per customer request. NEVER add multiple products at once.
      --> NEVER say or claim you added an item in conversational text without calling `add_item` first!
 
 CONTRASTIVE EXAMPLES FOR CLARITY:
@@ -431,6 +510,13 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
 
 4. CUSTOMIZING ITEMS (SWEETNESS / ICE / NOTES):
    - When the customer specifies sweetness or customization for an item (e.g. "less sugar", "no sugar", "extra ice", "oat milk"), call `update_item_notes` with `notes`.
+
+4b. CASUAL QUANTITY ADJUSTMENTS (MAKE IT 2 / ADD ONE MORE):
+   - When the customer asks to change quantity or says "make it 2", "make that 3", "change to 2", "make the latte 2":
+     --> Call `update_quantity(quantity=...)` (optionally with `product_name`).
+   - When the customer casually asks to add more (e.g. "add one more", "add another one", "one more please", "add 2 more"):
+     --> Call `add_more(quantity=...)` (optionally with `product_name`).
+   - NEVER call `search_product` or `add_item` with product_name="2" or "more"!
 
 5. ADD-ONS (VERY IMPORTANT):
    - After calling add_item and the result contains "addon_eligible": true, you MUST immediately call `get_addons()`.
@@ -533,7 +619,7 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
         return None
 
     def _handle_remove_item(self, cleaned_input: str) -> Optional[str]:
-        """Handles requests to remove a specific item from the cart."""
+        """Handles requests to remove a specific item from the cart, respecting quantity or complete removal."""
         rem_m = _REMOVE_ITEM_RE.match(cleaned_input)
         if rem_m:
             candidate = rem_m.group(1).strip()
@@ -543,15 +629,39 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
             }:
                 return self._handle_clear_cart("clear cart")
 
-            res = self.cart.remove_item(item_identifier=candidate)
+            # Check for complete removal keyword
+            completely = False
+            if re.search(r'\b(?:completely|all|all\s+of\s+them|all\s+of\s+it|entirely|whole)\b', candidate, re.IGNORECASE):
+                completely = True
+                candidate = re.sub(r'\b(?:completely|all|all\s+of\s+them|all\s+of\s+it|entirely|whole)\b', '', candidate, flags=re.IGNORECASE).strip()
+
+            WORD_TO_NUM = {
+                "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+                "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
+            }
+            clean_cand = re.sub(r'^(?:the|my|a|an)\s+', '', candidate, flags=re.IGNORECASE).strip()
+            q_m = re.match(r'^(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:of\s+)?(?:the\s+)?(.+)$', clean_cand, re.IGNORECASE)
+            quantity = None if completely else 1
+            if q_m:
+                q_str = q_m.group(1).lower()
+                parsed_qty = int(q_str) if q_str.isdigit() else WORD_TO_NUM.get(q_str, 1)
+                clean_cand = q_m.group(2).strip()
+                if not completely:
+                    quantity = parsed_qty
+
+            res = self.cart.remove_item(item_identifier=clean_cand, quantity=quantity)
             if res.get("success"):
-                item_name = res.get("removed_item", candidate)
+                item_name = res.get("removed_item", clean_cand)
+                qty_removed = res.get("quantity_removed", 1)
+                is_completely = res.get("removed_completely", False)
                 if self.cart.is_empty():
                     reply = f"I've removed {item_name} from your cart. Your order tray is now empty. What can I get for you?"
-                else:
+                elif is_completely:
                     reply = f"I've removed {item_name} from your cart. You still have: {self.cart.get_items_summary()}. Would you like anything else?"
+                else:
+                    reply = f"I've removed {qty_removed} {item_name} from your cart. You still have: {self.cart.get_items_summary()}. Would you like anything else?"
             else:
-                reply = f"I couldn't find {candidate} in your cart. You currently have: {self.cart.get_items_summary()}."
+                reply = f"I couldn't find {clean_cand} in your cart. You currently have: {self.cart.get_items_summary()}."
             return self._quick_reply(reply, cleaned_input)
         return None
 
@@ -573,32 +683,40 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
         if matched_cat:
             res = self.menu_client.get_products(category_name=matched_cat)
             prods = res.get("products", [])
+            if not prods:
+                from menu_api import SAMPLE_PRODUCTS
+                prods = [p for p in SAMPLE_PRODUCTS if p.get("category", "").upper() == matched_cat.upper() and p.get("isActive", True)]
+
             if prods:
                 top = prods[:3]
                 parts = []
                 for p in top:
                     name = p.get("name", "")
                     price = float(p.get("price", 0.0))
-                    parts.append(f"{name} for {price:.3f} BHD")
+                    price_str = f"{price:.1f}" if price == round(price, 1) else f"{price:.3f}".rstrip('0').rstrip('.')
+                    parts.append(f"{name} for {price_str} BHD")
                 if len(parts) >= 2:
                     items_speech = ", ".join(parts[:-1]) + f", and {parts[-1]}"
                 else:
                     items_speech = parts[0]
 
+                has_more = len(prods) > 3
+                more_suffix = ", plus more options on the screen" if has_more else ""
+
                 if matched_cat == "HOT DRINKS":
-                    reply = f"We have wonderful hot drinks! Some popular choices are {items_speech}. Which one would you like?"
+                    reply = f"We have wonderful hot drinks! Some popular choices are {items_speech}{more_suffix}. Which one would you like?"
                 elif matched_cat == "COLD DRINKS":
-                    reply = f"We have refreshing cold drinks! Popular choices include {items_speech}. Which one would you like to try?"
+                    reply = f"We have refreshing cold drinks! Popular choices include {items_speech}{more_suffix}. Which one would you like to try?"
                 elif matched_cat == "SOFT ICE":
-                    reply = f"Here are delicious soft ice options: {items_speech}. Which flavor would you like?"
+                    reply = f"Here are delicious soft ice options: {items_speech}{more_suffix}. Which flavor would you like?"
                 elif matched_cat == "FLOAT":
-                    reply = f"Our ice cream floats include {items_speech}. Which one sounds good to you?"
+                    reply = f"Our ice cream floats include {items_speech}{more_suffix}. Which one sounds good to you?"
                 elif matched_cat == "SHAKES & AFFOGATO":
-                    reply = f"Our shakes and affogato include {items_speech}. Would you like to try one?"
+                    reply = f"Our shakes and affogato include {items_speech}{more_suffix}. Would you like to try one?"
                 elif matched_cat == "KAKIGORI":
-                    reply = f"We offer refreshing kakigori shaved ice like {items_speech}. Which one would you like?"
+                    reply = f"We offer refreshing kakigori shaved ice like {items_speech}{more_suffix}. Which one would you like?"
                 else:
-                    reply = f"Here are great options in our {matched_cat.lower()}: {items_speech}. What would you like?"
+                    reply = f"Here are great options in our {matched_cat.lower()}: {items_speech}{more_suffix}. What would you like?"
                 return self._quick_reply(reply, cleaned_input)
 
         # If customer asked generally for drinks
@@ -613,14 +731,37 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
     def _handle_checkout_and_confirmation(self, cleaned_input: str) -> Optional[str]:
         """
         Handles order finalization and customer confirmation:
-        1. When customer asks to place order / checkout:
-           - If confirmation was not asked yet: reads back items and total amount, asks "Shall I place this order?"
-        2. When customer confirms ("yes", "place it", "confirm"):
-           - Calls confirm_and_submit(), gives order number and total amount, clears active cart.
+        1. Confirmation of pending item addition ("I found X for Y BHD. Shall I add that to your cart?").
+        2. Final checkout and order placement confirmation ("Shall I place this order?").
         """
+        # Step 0: Customer responds to pending item addition confirmation
+        if getattr(self, "pending_item_to_add", None):
+            if _CONFIRMATION_YES_RE.match(cleaned_input) or re.search(r'\b(?:add|yes|sure|please|confirm|ok|okay|yeah|yep)\b', cleaned_input, re.IGNORECASE):
+                pending = self.pending_item_to_add
+                self.pending_item_to_add = None
+                self.cart.add_item(
+                    product_id=pending.get("product_id", ""),
+                    name=pending["name"],
+                    quantity=pending.get("quantity", 1),
+                    price=pending.get("price", 0.0),
+                    notes=pending.get("notes", "")
+                )
+                reply = f"I've added {pending['name']} to your cart. Would you like anything else?"
+                return self._quick_reply(reply, cleaned_input)
+
+            elif _CONFIRMATION_NO_RE.match(cleaned_input) or re.search(r'\b(?:no|don\x27t|cancel|stop|nope)\b', cleaned_input, re.IGNORECASE):
+                self.pending_item_to_add = None
+                reply = "No problem, I won't add that. What else can I get for you?"
+                return self._quick_reply(reply, cleaned_input)
+
         # Step 2: Customer responds to confirmation question
         if getattr(self.cart, "confirmation_requested", False):
-            if _CONFIRMATION_YES_RE.match(cleaned_input) or _PLACE_ORDER_RE.search(cleaned_input):
+            is_confirm = (
+                _CONFIRMATION_YES_RE.match(cleaned_input)
+                or _PLACE_ORDER_RE.search(cleaned_input)
+                or bool(re.search(r'\b(?:yes|place|confirm|submit|proceed|sure|okay|ok|go ahead|do it)\b', cleaned_input, re.IGNORECASE))
+            )
+            if is_confirm:
                 res = self.cart.confirm_and_submit()
                 if res.get("success"):
                     order_num = res.get("order_number")
@@ -630,7 +771,7 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
                     reply = res.get("error", "Your cart is currently empty! What would you like to order?")
                 return self._quick_reply(reply, cleaned_input)
 
-            elif _CONFIRMATION_NO_RE.match(cleaned_input):
+            elif _CONFIRMATION_NO_RE.match(cleaned_input) or bool(re.search(r'\b(?:no|wait|cancel|stop|not yet|hold on)\b', cleaned_input, re.IGNORECASE)):
                 self.cart.confirmation_requested = False
                 reply = "No problem! What would you like to add or change in your order?"
                 return self._quick_reply(reply, cleaned_input)
@@ -646,6 +787,187 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
             self.cart.confirmation_requested = True
             reply = f"You have {items_speech}, for a total of {total:.3f} BHD. Shall I place this order?"
             return self._quick_reply(reply, cleaned_input)
+
+        return None
+
+    def _handle_add_item_intent(self, cleaned_input: str) -> Optional[str]:
+        """
+        Handles explicit ordering / add-item requests.
+        If the matched product is fuzzy or detected (e.g. 'choclate shake' -> 'Chocolate Milk Shakes'),
+        asks customer for confirmation before adding to cart!
+        If exact match, adds directly to cart.
+        """
+        add_m = _ADD_ITEM_INTENT_RE.match(cleaned_input)
+        if not add_m:
+            return None
+
+        # Exclude browsing, clear, and remove requests
+        if _OPTIONS_QUERY_RE.search(cleaned_input) or _CLEAR_CART_RE.search(cleaned_input) or _REMOVE_ITEM_RE.match(cleaned_input):
+            return None
+
+        raw_candidate = add_m.group(1).strip()
+        if raw_candidate.lower() in {"this", "that", "it", "something", "anything", "food", "drink", "options"}:
+            return None
+
+        WORD_TO_NUM = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
+        }
+        clean_target = re.sub(r'^(?:the|my|a|an)\s+', '', raw_candidate, flags=re.IGNORECASE).strip()
+        q_m = re.match(r'^(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:of\s+)?(?:the\s+)?(.+)$', clean_target, re.IGNORECASE)
+        qty = 1
+        if q_m:
+            q_str = q_m.group(1).lower()
+            qty = int(q_str) if q_str.isdigit() else WORD_TO_NUM.get(q_str, 1)
+            clean_target = q_m.group(2).strip()
+
+        # Search menu catalog for best matching product
+        s_res = self.menu_client.search_product(clean_target)
+        if not s_res.get("found") or not s_res.get("products"):
+            return None
+
+        products = s_res["products"]
+        top = products[0]
+        top_name = top["name"]
+        top_price = float(top.get("price", 0.0))
+        top_id = top.get("productId", "")
+
+        # Robust exact-match check using word overlap ratio:
+        # The customer's words must cover at least 80% of the product's words,
+        # AND the product name (lowercased) must be an exact or near-exact substring of the query.
+        q_words = set(re.findall(r'\w+', clean_target.lower()))
+        p_words = set(re.findall(r'\w+', top_name.lower()))
+        stopwords = {"a", "an", "the", "of", "with", "and"}
+        q_words -= stopwords
+        p_words -= stopwords
+
+        # Word overlap: what fraction of product name words appear in the customer query
+        overlap = len(p_words & q_words) / max(len(p_words), 1)
+        # Exact name containment
+        name_exact = (clean_target.lower() == top_name.lower() or top_name.lower() in clean_target.lower())
+        # Score gap: top result must be clearly dominant over runner-up (if any)
+        score_dominant = True
+        if len(products) > 1:
+            # We don't have scores here, but we can use the is_exact_match flag from search results
+            score_dominant = s_res.get("is_exact_match", False) or overlap >= 0.9
+
+        is_exact = name_exact or (overlap >= 0.80 and score_dominant)
+
+        if is_exact:
+            self.cart.add_item(product_id=top_id, name=top_name, quantity=qty, price=top_price)
+            reply = f"I've added {top_name} to your order. Would you like anything else?"
+            return self._quick_reply(reply, cleaned_input)
+        else:
+            # Fuzzy / detected match: Ask customer confirmation before adding to cart!
+            self.pending_item_to_add = {
+                "product_id": top_id,
+                "name": top_name,
+                "quantity": qty,
+                "price": top_price,
+                "notes": ""
+            }
+            qty_phrase = f"{qty} " if qty > 1 else ""
+            reply = f"I found {top_name} for {top_price:.3f} BHD. Shall I add {qty_phrase}that to your cart?"
+            return self._quick_reply(reply, cleaned_input)
+
+        return None
+
+    def _handle_quantity_adjustment(self, cleaned_input: str) -> Optional[str]:
+        """
+        Handles casual quantity adjustments like:
+        - 'make it 2', 'make that 3', 'make it two', 'change to 2', 'make the latte 2'
+        - 'add one more', 'one more', 'add another one', 'give me one more', 'add 2 more', 'another one please'
+        """
+        WORD_TO_NUM = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
+        }
+
+        t = cleaned_input.strip().lower()
+        t = re.sub(r'\bplease\b', '', t).strip()
+        t = re.sub(r'^(?:can\s+(?:i|you)\s+(?:have|get|make|change|add)?|could\s+(?:i|you)\s+(?:have|get|make|change|add)?|actually\s+)', '', t).strip()
+
+        # Check 1: Setting absolute quantity (make it 2, change to 3, etc.)
+        target_qty = None
+        target_item = None
+
+        m_make = re.match(r'^make\s+(?:it|that|this)(?:\s+into)?\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s+(?:of\s+them|of\s+those|instead))?$', t)
+        if m_make:
+            q_str = m_make.group(1)
+            target_qty = int(q_str) if q_str.isdigit() else WORD_TO_NUM.get(q_str, 1)
+
+        if target_qty is None:
+            m_change = re.match(r'^change\s+(?:(?:it|that|this)\s+)?(?:the\s+)?(?:quantity\s+)?to\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\s+instead)?$', t)
+            if m_change:
+                q_str = m_change.group(1)
+                target_qty = int(q_str) if q_str.isdigit() else WORD_TO_NUM.get(q_str, 1)
+
+        if target_qty is None:
+            m_named = re.match(r'^make\s+(?:the\s+)?(.+?)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)$', t)
+            if m_named:
+                cand_item = m_named.group(1).strip()
+                if cand_item not in {"it", "that", "this"}:
+                    q_str = m_named.group(2)
+                    target_qty = int(q_str) if q_str.isdigit() else WORD_TO_NUM.get(q_str, 1)
+                    target_item = cand_item
+
+        if target_qty is not None:
+            if self.cart.is_empty():
+                reply = "Your order tray is currently empty! What would you like to order today?"
+                return self._quick_reply(reply, cleaned_input)
+
+            res = self.cart.set_item_quantity(quantity=target_qty, item_identifier=target_item)
+            if res.get("success"):
+                p_name = res.get("product_name", "item")
+                if res.get("action") == "removed":
+                    if self.cart.is_empty():
+                        reply = f"I've removed {p_name} from your cart. Your order tray is now empty. What can I get for you?"
+                    else:
+                        reply = f"I've removed {p_name} from your cart. You still have: {self.cart.get_items_summary()}. Would you like anything else?"
+                else:
+                    reply = f"I've updated {p_name} to {target_qty}. Total is {self.cart.get_total():.3f} BHD. Would you like anything else?"
+                return self._quick_reply(reply, cleaned_input)
+            else:
+                reply = f"I couldn't find that item in your cart. You currently have: {self.cart.get_items_summary()}."
+                return self._quick_reply(reply, cleaned_input)
+
+        # Check 2: Relative quantity increase (add one more, another one, add 2 more, etc.)
+        delta_qty = None
+        delta_item = None
+
+        m_add_one = re.match(r'^(?:add|give\s+me|get\s+me|have)?\s*(?:an?other\s+one|an?other|one\s+more|1\s+more)(?:\s+(?:of\s+)?(?:the\s+)?(.+?))?$', t)
+        if m_add_one:
+            delta_qty = 1
+            cand = m_add_one.group(1)
+            if cand and cand not in {"please", "it", "that", "this", "them", "those"}:
+                delta_item = cand
+
+        if delta_qty is None:
+            m_add_n = re.match(r'^(?:add|give\s+me|get\s+me|have)?\s*(\d+|two|three|four|five|six|seven|eight|nine|ten)\s+more(?:\s+(?:of\s+)?(?:the\s+)?(.+?))?$', t)
+            if m_add_n:
+                q_str = m_add_n.group(1)
+                delta_qty = int(q_str) if q_str.isdigit() else WORD_TO_NUM.get(q_str, 1)
+                cand = m_add_n.group(2)
+                if cand and cand not in {"please", "it", "that", "this", "them", "those"}:
+                    delta_item = cand
+
+        if delta_qty is not None:
+            if self.cart.is_empty():
+                reply = "Your order tray is currently empty! What would you like to order today?"
+                return self._quick_reply(reply, cleaned_input)
+
+            res = self.cart.adjust_item_quantity(delta=delta_qty, item_identifier=delta_item)
+            if res.get("success"):
+                p_name = res.get("product_name", "item")
+                new_q = res.get("new_quantity", 1)
+                if delta_qty == 1:
+                    reply = f"I've added another {p_name}. You now have {new_q} in your cart for {self.cart.get_total():.3f} BHD. Would you like anything else?"
+                else:
+                    reply = f"I've added {delta_qty} more {p_name}. You now have {new_q} in your cart for {self.cart.get_total():.3f} BHD. Would you like anything else?"
+                return self._quick_reply(reply, cleaned_input)
+            else:
+                reply = f"I couldn't find that item in your cart. You currently have: {self.cart.get_items_summary()}."
+                return self._quick_reply(reply, cleaned_input)
 
         return None
 
@@ -716,6 +1038,20 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
             self.misunderstand_count = 0
             self.off_topic_count = 0
             return checkout_res
+
+        # ── 3dc. Casual quantity adjustment shortcut (e.g. "make it 2", "add one more") ──
+        qty_res = self._handle_quantity_adjustment(cleaned_input)
+        if qty_res is not None:
+            self.misunderstand_count = 0
+            self.off_topic_count = 0
+            return qty_res
+
+        # ── 3dd. Add item intent with confirmation for detected items ───
+        add_res = self._handle_add_item_intent(cleaned_input)
+        if add_res is not None:
+            self.misunderstand_count = 0
+            self.off_topic_count = 0
+            return add_res
 
         # ── 3e. Customization shortcut (e.g. "less sugar", "no sugar", "extra ice") ──
         if not self.cart.is_empty() and _CUSTOMIZATION_RE.search(cleaned_input):
@@ -894,13 +1230,13 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
                     break
 
             except requests.exceptions.Timeout:
-                logger.error("Ollama request timed out.")
+                logger.error(f"Ollama request to {chat_url} timed out.")
                 return (
                     "Sorry, I'm taking too long to respond. "
                     "Please use the touch screen or I'll get a staff member."
                 )
             except Exception as e:
-                logger.error(f"Error communicating with Ollama: {e}")
+                logger.error(f"Error communicating with Ollama at {chat_url}: {e}")
                 return "I ran into a problem. Would you like to use the touch screen or speak with staff?"
 
         if not final_reply:
@@ -927,10 +1263,11 @@ CONTRASTIVE EXAMPLES FOR CLARITY:
                     cand = rem_m.group(1).strip()
                     self.cart.remove_item(cand)
 
-        # ── Post-process: strip markdown → transform leaked code into dialogue → limit to 2 sentences ──
+        # ── Post-process: strip markdown → transform leaked code into dialogue → condense runaway lists → limit to 2 sentences ──
         clean_text = clean_spoken_text(final_reply)
         friendly_text = format_friendly_reply_if_code(clean_text, self.cart)
-        voice_text = self.limit_to_two_sentences(friendly_text)
+        condensed_text = condense_long_spoken_list(friendly_text)
+        voice_text = self.limit_to_two_sentences(condensed_text)
 
         # Append final response to history
         self.messages.append({"role": "assistant", "content": voice_text})

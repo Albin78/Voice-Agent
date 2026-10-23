@@ -5,16 +5,16 @@ from dotenv import load_dotenv
 # Base directory
 BASE_DIR = Path(__file__).resolve().parent
 
-# Load environment variables from .env.development or .env
+# Load environment variables in priority order (.env.production, .env.development, .env)
+# Using override=False so explicit Docker container variables (-e OLLAMA_PUBLIC_URL=...) always take top priority
+ENV_PROD_PATH = BASE_DIR / ".env.production"
 ENV_DEV_PATH = BASE_DIR / ".env.development"
 ENV_PATH = BASE_DIR / ".env"
 
-if ENV_DEV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_DEV_PATH, override=True)
-elif ENV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_PATH, override=True)
-else:
-    load_dotenv(override=True)
+for env_file in [ENV_PROD_PATH, ENV_DEV_PATH, ENV_PATH]:
+    if env_file.exists():
+        load_dotenv(dotenv_path=env_file, override=False)
+load_dotenv(override=False)
 
 
 class Config:
@@ -25,12 +25,21 @@ class Config:
     REFRESH_API_URL = os.getenv("REFRESH_API_URL", "http://51.222.143.153:5001/api/v1/auth/refresh")
     REFRESH_TOKEN = os.getenv("REFRESH_TOKEN", "")
 
+    # Auto-login (used by auth.TokenManager when the token expires)
+    LOGIN_API_URL = os.getenv("LOGIN_API_URL", "http://51.222.143.153:5001/api/v1/auth/login")
+    API_LOGIN_EMAIL = os.getenv("API_LOGIN_EMAIL", "adithya@gmail.com")
+    API_LOGIN_PASSWORD = os.getenv("API_LOGIN_PASSWORD", "adithya")
+    LOGIN_USERNAME_FIELD = os.getenv("LOGIN_USERNAME_FIELD", "email")  # API accepts "email" (or phone)
+    TOKEN_CACHE_PATH = os.getenv("TOKEN_CACHE_PATH", str(BASE_DIR / ".token_cache.json"))
+
     # Restaurant Info
     RESTAURANT_NAME = os.getenv("RESTAURANT_NAME", "Girfalco")
 
     # LLM Settings (Ollama)
-    OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
+    # Checks OLLAMA_PUBLIC_URL first (Cloudflare tunnel), then OLLAMA_BASE_URL, then fallback
+    _raw_ollama_url = os.getenv("OLLAMA_PUBLIC_URL") or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    OLLAMA_BASE_URL = _raw_ollama_url.strip().strip('"\'').rstrip('/') if _raw_ollama_url else "http://localhost:11434"
+    OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b").strip().strip('"\'')
 
     # Silero VAD Settings (optimized for natural kiosk conversational pauses without cutting off mid-sentence)
     VAD_SAMPLE_RATE = int(os.getenv("VAD_SAMPLE_RATE", "16000"))
@@ -75,8 +84,21 @@ class Config:
     @classmethod
     def reload_env(cls):
         """Reload environment variables if changed dynamically."""
-        if ENV_DEV_PATH.exists():
-            load_dotenv(dotenv_path=ENV_DEV_PATH, override=True)
+        for env_path in [ENV_DEV_PATH, ENV_PATH]:
+            if env_path.exists():
+                load_dotenv(dotenv_path=env_path, override=False)
+        load_dotenv(override=False)
         cls.PRODUCTS_API = os.getenv("PRODUCTS_API", cls.PRODUCTS_API)
         cls.PRODUCTS_CATEGORY_URL = os.getenv("PRODUCTS_CATEGORY_URL", cls.PRODUCTS_CATEGORY_URL)
         cls.API_TOKEN = os.getenv("API_TOKEN", cls.API_TOKEN)
+        cls.REFRESH_API_URL = os.getenv("REFRESH_API_URL", cls.REFRESH_API_URL)
+        cls.REFRESH_TOKEN = os.getenv("REFRESH_TOKEN", cls.REFRESH_TOKEN)
+        cls.LOGIN_API_URL = os.getenv("LOGIN_API_URL", cls.LOGIN_API_URL)
+        cls.API_LOGIN_EMAIL = os.getenv("API_LOGIN_EMAIL", cls.API_LOGIN_EMAIL)
+        cls.API_LOGIN_PASSWORD = os.getenv("API_LOGIN_PASSWORD", cls.API_LOGIN_PASSWORD)
+        cls.LOGIN_USERNAME_FIELD = os.getenv("LOGIN_USERNAME_FIELD", cls.LOGIN_USERNAME_FIELD)
+        cls.TOKEN_CACHE_PATH = os.getenv("TOKEN_CACHE_PATH", cls.TOKEN_CACHE_PATH)
+        cls.ENABLE_MOCK_FALLBACK = os.getenv("ENABLE_MOCK_FALLBACK", "true").lower() in ("true", "1", "yes")
+        raw_url = os.getenv("OLLAMA_PUBLIC_URL") or os.getenv("OLLAMA_BASE_URL", cls.OLLAMA_BASE_URL)
+        cls.OLLAMA_BASE_URL = raw_url.strip().strip('"\'').rstrip('/') if raw_url else cls.OLLAMA_BASE_URL
+        cls.OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", cls.OLLAMA_MODEL).strip().strip('"\'')

@@ -4,6 +4,7 @@ import torch
 import numpy as np
 import logging
 from config import Config
+import os
 
 logger = logging.getLogger("WhisperSTT")
 
@@ -117,9 +118,41 @@ class WhisperSTT:
     def __init__(self, model_name: str = Config.WHISPER_MODEL, language: str = Config.WHISPER_LANGUAGE):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.language = language
-        logger.info(f"Loading Whisper model '{model_name}' on device '{self.device}'...")
-        self.model = whisper.load_model(model_name, device=self.device)
-        logger.info("Whisper model loaded successfully.")
+
+        # Determine whisper cache file location
+        cache_root = os.path.join(os.getenv("XDG_CACHE_HOME", os.path.join(os.path.expanduser("~"), ".cache")), "whisper")
+        target_model_file = os.path.join(cache_root, f"{model_name}.pt")
+
+        self.model = None
+        max_attempts = 2
+        for attempt in range(1, max_attempts + 1):
+            try:
+                logger.info(f"Loading Whisper model '{model_name}' on device '{self.device}' (attempt {attempt}/{max_attempts})...")
+                self.model = whisper.load_model(model_name, device=self.device)
+                logger.info("Whisper model loaded successfully.")
+                break
+            except Exception as e:
+                err_msg = str(e).lower()
+                logger.warning(f"Whisper model load failed (attempt {attempt}): {e}")
+                # If checksum or corruption occurs, remove the bad checkpoint file so it can re-download clean
+                if "checksum" in err_msg or "sha256" in err_msg or "corrupted" in err_msg:
+                    if os.path.exists(target_model_file):
+                        try:
+                            os.remove(target_model_file)
+                            logger.info(f"Purged corrupted checkpoint: {target_model_file}")
+                        except Exception as rm_err:
+                            logger.warning(f"Failed to remove {target_model_file}: {rm_err}")
+                if attempt == max_attempts:
+                    # Final safety fallback: If requested model (e.g. 'small') failed repeatedly, fall back to 'base'
+                    if model_name != "base":
+                        logger.warning(f"Retrying with lightweight 'base' Whisper model fallback...")
+                        try:
+                            self.model = whisper.load_model("base", device=self.device)
+                            logger.info("Fallback Whisper model 'base' loaded successfully.")
+                            break
+                        except Exception as base_err:
+                            logger.error(f"Fallback to 'base' model also failed: {base_err}")
+                    raise e
 
     def transcribe(self, audio: np.ndarray) -> str:
         """

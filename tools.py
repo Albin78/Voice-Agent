@@ -235,6 +235,48 @@ TOOL_DEFINITIONS = [
                 "required": ["addon_name"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "update_quantity",
+            "description": "Change or set the quantity of an item in the cart when customer asks to change quantity or says 'make it 2', 'make that 3', 'change to 2', or specifies a new count. If product_name is omitted, modifies the most recently added item in the cart.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "quantity": {
+                        "type": "integer",
+                        "description": "The new target quantity (e.g. 2 for 'make it 2')"
+                    },
+                    "product_name": {
+                        "type": "string",
+                        "description": "Optional name of the product in cart to update"
+                    }
+                },
+                "required": ["quantity"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_more",
+            "description": "Add additional quantity of an item already in the cart when customer casually says 'add one more', 'one more', 'add another one', 'add 2 more', or requests more of the current item. If product_name is omitted, increments the most recently added item.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "quantity": {
+                        "type": "integer",
+                        "description": "Additional quantity to add (default 1)"
+                    },
+                    "product_name": {
+                        "type": "string",
+                        "description": "Optional name of the product in cart"
+                    }
+                },
+                "required": []
+            }
+        }
     }
 ]
 
@@ -260,6 +302,12 @@ class ToolDispatcher:
                 cat_id = arguments.get("category_id")
                 cat_name = arguments.get("category_name")
                 res = self.menu_client.get_products(category_id=cat_id, category_name=cat_name)
+                if isinstance(res, dict) and "products" in res:
+                    res["voice_guidance"] = (
+                        "Voice Rule: Warmly highlight at most 3 popular items with their BHD prices "
+                        "and mention the remaining options are displayed on screen. "
+                        "Do not recite more than 3 items over voice."
+                    )
                 return json.dumps(res)
 
             elif tool_name == "search_product":
@@ -280,8 +328,31 @@ class ToolDispatcher:
                     matches = s_res.get("products", [])
                     if matches:
                         top = matches[0]
+                        resolved_name = top.get("name", name)
+                        # Exact-match guard: only proceed if the LLM-requested name closely matches the
+                        # catalog name. If it's a fuzzy match, return a needs_confirmation signal so the
+                        # LLM asks the customer before adding.
+                        is_exact = (
+                            name.lower() == resolved_name.lower()
+                            or resolved_name.lower() in name.lower()
+                            or name.lower() in resolved_name.lower()
+                        )
+                        if not is_exact:
+                            return json.dumps({
+                                "success": False,
+                                "status": "needs_confirmation",
+                                "message": (
+                                    f"The product '{name}' is not an exact catalog match. "
+                                    f"The closest item is '{resolved_name}' for {float(top.get('price', 0)):.3f} BHD. "
+                                    f"Do NOT add it yet. Ask the customer: "
+                                    f"'Did you mean {resolved_name} for {float(top.get('price', 0)):.3f} BHD? Shall I add that?' "
+                                    f"Only call add_item again AFTER the customer confirms."
+                                ),
+                                "suggested_name": resolved_name,
+                                "suggested_price": float(top.get("price", 0))
+                            })
                         p_id = p_id or top.get("productId")
-                        name = top.get("name", name)
+                        name = resolved_name
                         price = float(top.get("price", price))
 
                 item = self.cart.add_item(
@@ -332,8 +403,20 @@ class ToolDispatcher:
             elif tool_name == "remove_item":
                 name = arguments.get("product_name") or arguments.get("name") or arguments.get("item_name") or ""
                 qty_val = arguments.get("quantity")
-                qty = int(qty_val) if qty_val is not None else 1
+                qty = int(qty_val) if qty_val is not None else None
                 res = self.cart.remove_item(item_identifier=name, quantity=qty)
+                return json.dumps(res)
+
+            elif tool_name in ("update_quantity", "set_quantity", "set_item_quantity"):
+                qty = int(arguments.get("quantity", 1))
+                name = arguments.get("product_name") or arguments.get("name")
+                res = self.cart.set_item_quantity(quantity=qty, item_identifier=name)
+                return json.dumps(res)
+
+            elif tool_name in ("add_more", "addmore", "adjust_item_quantity"):
+                qty = int(arguments.get("quantity", 1))
+                name = arguments.get("product_name") or arguments.get("name")
+                res = self.cart.adjust_item_quantity(delta=qty, item_identifier=name)
                 return json.dumps(res)
 
             elif tool_name == "get_cart":

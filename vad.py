@@ -109,6 +109,18 @@ class SileroVADDetector:
             logger.error(f"Failed to load Silero VAD from torch hub: {e}")
             raise e
 
+        self._has_mic = self._detect_mic()
+
+    @staticmethod
+    def _detect_mic() -> bool:
+        """Return True if the host has a valid audio input device (microphone)."""
+        try:
+            import sounddevice as sd
+            devs = sd.query_devices()
+            return any(d.get("max_input_channels", 0) > 0 for d in devs)
+        except Exception:
+            return False
+
     def create_iterator(self):
         return KioskVADIterator(
             self.model,
@@ -131,6 +143,10 @@ class SileroVADDetector:
         Returns the recorded audio as a float32 numpy array once the user
         finishes speaking.
         """
+        if not getattr(self, "_has_mic", True):
+            logger.info("Host has no physical microphone device (headless VM). Skipping hardware listen.")
+            return None
+
         vad_iterator = self.create_iterator()
         audio_q = queue.Queue()
 
@@ -148,73 +164,77 @@ class SileroVADDetector:
         start_time = time.time()
 
         # Open non-blocking audio input stream
-        with sd.InputStream(
-            samplerate=self.sample_rate,
-            channels=1,
-            dtype="float32",
-            blocksize=self.chunk_size,
-            callback=audio_callback,
-        ):
-            logger.info(
-                "Microphone stream opened. Listening for speech with Silero VAD v5..."
-            )
-            if on_vad_status:
-                on_vad_status("listening", 0.0)
-
-            while True:
-                if timeout and (time.time() - start_time) > timeout:
-                    if not speech_detected:
-                        return None
-
-                try:
-                    chunk = audio_q.get(timeout=0.2)
-                except queue.Empty:
-                    continue
-
-                chunk_flat = chunk.flatten()
-                tensor_chunk = torch.from_numpy(chunk_flat)
-
-                # Feed chunk to single-pass KioskVADIterator (advances RNN state once)
-                vad_event = vad_iterator(tensor_chunk)
-                speech_prob = vad_iterator.last_speech_prob
-
+        try:
+            with sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=1,
+                dtype="float32",
+                blocksize=self.chunk_size,
+                callback=audio_callback,
+            ):
+                logger.info(
+                    "Microphone stream opened. Listening for speech with Silero VAD v5..."
+                )
                 if on_vad_status:
-                    status_label = (
-                        "speaking" if speech_detected else "listening"
-                    )
-                    on_vad_status(status_label, speech_prob)
+                    on_vad_status("listening", 0.0)
 
-                if vad_event is not None:
-                    if "start" in vad_event and not speech_detected:
-                        speech_detected = True
-                        logger.info("Silero VAD: Speech start detected!")
-                        if on_speech_start:
-                            on_speech_start()
-                        # Prepend buffered audio so word beginnings are not clipped
-                        speech_frames.extend(list(pre_speech_ring))
-                        speech_frames.append(chunk_flat)
+                while True:
+                    if timeout and (time.time() - start_time) > timeout:
+                        if not speech_detected:
+                            return None
 
-                    elif "end" in vad_event and speech_detected:
-                        logger.info("Silero VAD: Speech end detected after silence hold.")
-                        speech_frames.append(chunk_flat)
-                        if on_speech_end:
-                            on_speech_end()
-                        break
-                else:
-                    if speech_detected:
-                        speech_frames.append(chunk_flat)
-                        # Safety check: prevent runaway recording (>20 seconds)
-                        if (
-                            len(speech_frames) * self.chunk_size
-                        ) / self.sample_rate > 20:
-                            logger.info(
-                                "Max speech length reached (20s). Ending recording."
-                            )
+                    try:
+                        chunk = audio_q.get(timeout=0.2)
+                    except queue.Empty:
+                        continue
+
+                    chunk_flat = chunk.flatten()
+                    tensor_chunk = torch.from_numpy(chunk_flat)
+
+                    # Feed chunk to single-pass KioskVADIterator (advances RNN state once)
+                    vad_event = vad_iterator(tensor_chunk)
+                    speech_prob = vad_iterator.last_speech_prob
+
+                    if on_vad_status:
+                        status_label = (
+                            "speaking" if speech_detected else "listening"
+                        )
+                        on_vad_status(status_label, speech_prob)
+
+                    if vad_event is not None:
+                        if "start" in vad_event and not speech_detected:
+                            speech_detected = True
+                            logger.info("Silero VAD: Speech start detected!")
+                            if on_speech_start:
+                                on_speech_start()
+                            # Prepend buffered audio so word beginnings are not clipped
+                            speech_frames.extend(list(pre_speech_ring))
+                            speech_frames.append(chunk_flat)
+
+                        elif "end" in vad_event and speech_detected:
+                            logger.info("Silero VAD: Speech end detected after silence hold.")
+                            speech_frames.append(chunk_flat)
                             if on_speech_end:
                                 on_speech_end()
                             break
                     else:
-                        pre_speech_ring.append(chunk_flat)
+                        if speech_detected:
+                            speech_frames.append(chunk_flat)
+                            # Safety check: prevent runaway recording (>20 seconds)
+                            if (
+                                len(speech_frames) * self.chunk_size
+                            ) / self.sample_rate > 20:
+                                logger.info(
+                                    "Max speech length reached (20s). Ending recording."
+                                )
+                                if on_speech_end:
+                                    on_speech_end()
+                                break
+                        else:
+                            pre_speech_ring.append(chunk_flat)
+        except (sd.PortAudioError, Exception) as e:
+            logger.warning(f"Hardware audio device unavailable ({e}). Host appears headless/VM.")
+            return None
 
 
         if speech_frames:

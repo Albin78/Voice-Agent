@@ -6,7 +6,7 @@ from menu_api import MenuAPIClient
 
 class TestOrderPlacementFlow(unittest.TestCase):
     def setUp(self):
-        self.menu_client = MenuAPIClient()
+        self.menu_client = MenuAPIClient(force_mock=True)
         self.cart = OrderCart()
         self.agent = ChefAgent(cart=self.cart, menu_client=self.menu_client)
 
@@ -86,6 +86,60 @@ class TestOrderPlacementFlow(unittest.TestCase):
         self.assertFalse(self.cart.is_submitted)
         self.assertIn("change", decline_reply.lower())
         self.assertEqual(len(self.cart.items), 1)
+
+    def test_consecutive_place_the_order_places_order(self):
+        """
+        When asked 'place the order', Chef asks for confirmation with total price.
+        Next, when customer asks 'place the order' again, the order is placed without confusing the consumer.
+        """
+        self.cart.add_item(101, "Ice Americano", 1, 1.500)
+        self.cart.add_item(102, "Ice Caramel Latte", 1, 2.700)
+        self.assertEqual(self.cart.get_total(), 4.200)
+
+        # Turn 1: Customer asks 'place the order'
+        r1 = self.agent.process_turn("place the order")
+        print("\n[CONSECUTIVE TURN 1] Chef:", r1)
+        self.assertTrue(self.cart.confirmation_requested)
+        self.assertFalse(self.cart.is_submitted)
+        self.assertIn("Ice Americano", r1)
+        self.assertIn("Ice Caramel Latte", r1)
+        self.assertIn("4.200 BHD", r1)
+        self.assertIn("Shall I place this order?", r1)
+
+        # Turn 2: Customer repeats 'place the order'
+        r2 = self.agent.process_turn("place the order")
+        print("\n[CONSECUTIVE TURN 2] Chef:", r2)
+        self.assertTrue(self.cart.is_submitted)
+        self.assertIsNotNone(self.cart.order_number)
+        self.assertIn(self.cart.order_number, r2)
+        self.assertIn("4.200 BHD", r2)
+        self.assertIn("Please proceed to the counter", r2)
+        self.assertTrue(self.cart.is_empty())
+
+    def test_turn2_place_order_variations(self):
+        """Test variations like 'place this order', 'place that order', 'can you place the order' on Turn 2."""
+        variations = [
+            "place this order",
+            "place that order",
+            "can you place the order",
+            "please place the order",
+            "place it"
+        ]
+        for phrase in variations:
+            cart = OrderCart()
+            agent = ChefAgent(cart=cart, menu_client=self.menu_client)
+            cart.add_item(101, "Americano Hot M", 1, 1.500)
+
+            # Turn 1: asks confirmation with total
+            r1 = agent.process_turn("place the order")
+            self.assertTrue(cart.confirmation_requested)
+            self.assertIn("1.500 BHD", r1)
+
+            # Turn 2: customer confirms using variation phrase
+            r2 = agent.process_turn(phrase)
+            self.assertTrue(cart.is_submitted, f"Failed to submit on phrase: '{phrase}'")
+            self.assertIn("placed for", r2)
+            self.assertTrue(cart.is_empty())
 
 
 if __name__ == "__main__":
